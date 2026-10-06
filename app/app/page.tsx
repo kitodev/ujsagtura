@@ -13,7 +13,7 @@ const api = async (u: string, m = "GET", b?: unknown) => {
 const MapView = dynamic(() => import("@/components/Map"), { ssr: false });
 
 type Paper = { id: string; paper: string };
-type Stop = { id: string; position: number; address: string; name: string; note: string; lat: number | null; lon: number | null; stop_papers: Paper[] };
+type Stop = { id: string; route_id?: string; position: number; address: string; name: string; note: string; lat: number | null; lon: number | null; stop_papers: Paper[] };
 type Route = { id: string; name: string; note: string };
 const NEXT: Record<string, string | null> = { "": "delivered", delivered: "missing", missing: "cancelled", cancelled: null };
 const LABEL: Record<string, string> = { delivered: "Leadva", missing: "Hiányzik", cancelled: "Lemondva" };
@@ -28,6 +28,15 @@ function stepText(s: Step) {
   if (m.modifier === "uturn") return "Fordulj vissza";
   if (!m.modifier || m.modifier === "straight" || m.type === "continue") return `Haladj egyenesen${n}`;
   return `Fordulj ${MOD[m.modifier] ?? "tovább"}${n}`;
+}
+// Csak kiskunhalasi cím fogadható el: a találatnak Kiskunhalast kell tartalmaznia
+async function verify(addr: string): Promise<{ lat: number; lon: number } | null> {
+  const q = geoKey(addr);
+  try {
+    const j: { lat: string; lon: string; display_name: string }[] = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunhalas")}`)).json();
+    const h = j.find((x) => x.display_name.includes("Kiskunhalas"));
+    return h ? { lat: +h.lat, lon: +h.lon } : null;
+  } catch { return null; }
 }
 const geoKey = (a: string) => a.replace(/\(.*?\)/g, "").split("–")[0].replace(/\.$/, "").trim();
 const hav = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
@@ -49,6 +58,9 @@ export default function Page() {
   const [msg, setMsg] = useState("");
   const [sum, setSum] = useState("");
   const [meta, setMeta] = useState<Meta>({ papers: [], addresses: [], names: [] });
+  const [q, setQ] = useState("");
+  const [found, setFound] = useState<Stop[]>([]);
+  const [tick, setTick] = useState(0);
   const [nav, setNav] = useState<Nav | null>(null);
   const [idx, setIdx] = useState(0);
   const [voice, setVoice] = useState(false);
@@ -60,6 +72,7 @@ export default function Page() {
   const load = useCallback(async (r: string) => {
     const d = await api(`/api/stops?route=${encodeURIComponent(r)}&day=${day}`);
     setStops(d.stops);
+    setTick((t) => t + 1);
     setDv(d.deliveries);
     api("/api/meta").then(setMeta).catch(() => {});
   }, [day]);
@@ -84,9 +97,10 @@ export default function Page() {
       const q = geoKey(s.address);
       setMsg(`Keresés: ${q}`);
       try {
-        const j = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunmajsa")}`)).json();
-        if (j[0]) {
-          const lat = +j[0].lat, lon = +j[0].lon;
+        const j = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunhalas")}`)).json();
+        const h = (j as { lat: string; lon: string; display_name: string }[]).find((x) => x.display_name.includes("Kiskunhalas"));
+        if (h) {
+          const lat = +h.lat, lon = +h.lon;
           await api(`/api/stops/${s.id}`, "PATCH", { lat, lon });
           setStops((p) => p.map((x) => (x.id === s.id ? { ...x, lat, lon } : x)));
         }
@@ -101,14 +115,22 @@ export default function Page() {
   async function saveStop() {
     if (!f.a.trim() || !f.r) return;
     const ps = f.p.split(",").map((x) => x.trim()).filter(Boolean);
-    await api("/api/stops", "POST", { route_id: f.r, address: f.a.trim(), name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat: f.lat, lon: f.lon });
+    let { lat, lon } = f;
+    if (lat == null) {
+      setMsg("Cím ellenőrzése…");
+      const v = await verify(f.a);
+      setMsg("");
+      if (!v) { alert("Ez a cím nem található Kiskunhalason (vagy nincs internet az ellenőrzéshez). Válassz a javaslatok közül, vagy pontosítsd a címet."); return; }
+      lat = v.lat; lon = v.lon;
+    }
+    await api("/api/stops", "POST", { route_id: f.r, address: f.a.trim(), name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon });
     setDlg(""); setF({ ...f, a: "", n: "", p: "", o: "", lat: null, lon: null });
     if (f.r === route) load(route); else setRoute(f.r);
   }
   const [xd, setXd] = useState(""), [xr, setXr] = useState("all");
-  const [editId, setEditId] = useState("");
+  const [editId, setEditId] = useState(""), [editOrig, setEditOrig] = useState("");
   function openEdit(s: Stop) {
-    setEditId(s.id);
+    setEditId(s.id); setEditOrig(s.address);
     setF({ ...f, a: s.address, n: s.name, o: s.note, p: s.stop_papers.map((x) => x.paper).join(", "), lat: null, lon: null });
     setDlg("edit");
   }
@@ -116,7 +138,13 @@ export default function Page() {
     const a = f.a.trim(); if (!a) return;
     const seen = new Set<string>();
     const ps = f.p.split(",").map((x) => x.trim()).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
-    await api(`/api/stops/${editId}`, "PUT", { address: a, name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat: f.lat, lon: f.lon });
+    let { lat, lon } = f;
+    if (lat == null && a !== editOrig) {
+      const v = await verify(a);
+      if (!v) { alert("Ez a cím nem található Kiskunhalason (vagy nincs internet az ellenőrzéshez). Válassz a javaslatok közül, vagy pontosítsd a címet."); return; }
+      lat = v.lat; lon = v.lon;
+    }
+    await api(`/api/stops/${editId}`, "PUT", { address: a, name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon });
     setDlg(""); load(route);
   }
   async function delStop() {
@@ -132,10 +160,15 @@ export default function Page() {
   const [scan, setScan] = useState(false);
   async function saveScan(rows: { route_id: string; address: string; name: string; papers: string[] }[]) {
     const have = new Set(stops.map((s) => s.address.toLowerCase()));
+    const bad: string[] = [];
     for (const r of rows) {
       if (r.route_id === route && have.has(r.address.toLowerCase())) continue;
-      await api("/api/stops", "POST", { ...r, note: "" });
+      const v = await verify(r.address);
+      if (!v) { bad.push(r.address); continue; }
+      await api("/api/stops", "POST", { ...r, note: "", lat: v.lat, lon: v.lon });
+      await new Promise((x) => setTimeout(x, 1100));
     }
+    if (bad.length) alert("Nem található Kiskunhalason, ezért nem lett felvéve:\n" + bad.join("\n"));
     setScan(false); setRoute(rows[0].route_id); load(rows[0].route_id);
   }
   async function startNav(to: Stop) {
@@ -148,6 +181,20 @@ export default function Page() {
       setIdx(0); setMsg("");
     } catch { setMsg("Az útvonaltervezés nem sikerült (internet kell)."); }
   }
+  useEffect(() => {
+    const t = q.trim();
+    if (!t) { setFound([]); return; }
+    const h = setTimeout(async () => {
+      try {
+        const d = await api(`/api/stops?route=all&day=${day}`);
+        const nz = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const k = nz(t);
+        setFound((d.stops as Stop[]).filter((s) => nz(`${s.address} ${s.name}`).includes(k)));
+        setDv((o) => ({ ...o, ...d.deliveries }));
+      } catch {}
+    }, 300);
+    return () => clearTimeout(h);
+  }, [q, tick, day]);
   const best = useRef(Infinity);
   useEffect(() => { best.current = Infinity; }, [idx, nav]);
   useEffect(() => {
@@ -200,6 +247,29 @@ export default function Page() {
   }
 
   const note = routes.find((r) => r.id === route)?.note;
+  const renderCard = (s: Stop, i: number, tag?: string) => {
+    const d = handled(s);
+    if (only && d && !tag) return null;
+    return (
+      <div key={s.id} id={"c" + s.id} className={`card${d ? " done" : ""}${nx?.s.id === s.id && showMap && !tag ? " nx" : ""}`}>
+        <div className="top">
+          <div><div className="ad">{i >= 0 ? `${i + 1}. ` : ""}{s.address}</div>{(s.name || tag) && <div className="nm">{s.name}{tag && ` · ${tag}. túra`}</div>}</div>
+          <div style={{ display: "flex", gap: 4, height: "fit-content" }}>
+            <button className="all" style={{ color: "var(--mu)", borderColor: "var(--bd)" }} onClick={() => openEdit(s)}>✎ Szerkeszt</button>
+            {!d && <button className="all" onClick={() => allDone(s)}>Mind leadva</button>}
+          </div>
+        </div>
+        {s.note && <div className="sn">⚠ {s.note}</div>}
+        <div className="chips">
+          {s.stop_papers.map((p) => (
+            <button key={p.id} className={`chip ${dv[p.id] ?? ""}`} onClick={() => cycle(s, p)}>
+              {p.paper}{dv[p.id] ? " · " + LABEL[dv[p.id]] : ""}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <>
@@ -218,6 +288,7 @@ export default function Page() {
         </div>
       </header>
       <main>
+        <input className="srch" placeholder="🔎 Keresés: utca, házszám vagy név (minden túrában)" value={q} onChange={(e) => setQ(e.target.value)} />
         {showMap && (
           <>
             <MapView pins={pins} me={gps} line={nav?.coords ?? null} follow={!!nav} onPick={(id) => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" })} />
@@ -243,29 +314,12 @@ export default function Page() {
         )}
         {sum && <pre>{sum}<br /><button onClick={() => navigator.clipboard.writeText(sum)}>Másolás</button> <button onClick={() => setSum("")}>Bezár</button></pre>}
         {note && <div className="note">{note}</div>}
-        {stops.map((s, i) => {
-          const d = handled(s);
-          if (only && d) return null;
-          return (
-            <div key={s.id} id={"c" + s.id} className={`card${d ? " done" : ""}${nx?.s.id === s.id && showMap ? " nx" : ""}`}>
-              <div className="top">
-                <div><div className="ad">{i + 1}. {s.address}</div>{s.name && <div className="nm">{s.name}</div>}</div>
-                <div style={{ display: "flex", gap: 4, height: "fit-content" }}>
-                  <button className="all" style={{ color: "var(--mu)", borderColor: "var(--bd)" }} onClick={() => openEdit(s)}>✎ Szerkeszt</button>
-                  {!d && <button className="all" onClick={() => allDone(s)}>Mind leadva</button>}
-                </div>
-              </div>
-              {s.note && <div className="sn">⚠ {s.note}</div>}
-              <div className="chips">
-                {s.stop_papers.map((p) => (
-                  <button key={p.id} className={`chip ${dv[p.id] ?? ""}`} onClick={() => cycle(s, p)}>
-                    {p.paper}{dv[p.id] ? " · " + LABEL[dv[p.id]] : ""}
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
+        {q.trim() ? (
+          <>
+            <div className="meta" style={{ margin: "6px 0" }}>{found.length} találat (minden túrában)</div>
+            {found.map((s) => renderCard(s, -1, s.route_id))}
+          </>
+        ) : stops.map((s, i) => renderCard(s, i))}
       </main>
       {dlg && (
         <div className="ov" onClick={() => setDlg("")}>

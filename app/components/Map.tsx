@@ -29,7 +29,7 @@ function FitLine({ line }: { line: [number, number][] | null }) {
 
 export default function Map({ pins, me, onPick, line, follow }: { pins: Pin[]; me: LL | null; onPick: (id: string) => void; line: [number, number][] | null; follow: boolean }) {
   return (
-    <MapContainer center={[46.49, 19.74]} zoom={14} style={{ height: "38vh" }}>
+    <MapContainer center={[46.434, 19.485]} zoom={14} style={{ height: "38vh" }}>
       <TileLayer url="https://tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="© OpenStreetMap" maxZoom={19} />
       <Fit pins={pins} />
       <FitLine line={line} />

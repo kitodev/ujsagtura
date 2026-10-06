@@ -27,8 +27,8 @@ export default function StopForm<T extends F>({ f, setF, meta }: { f: T; setF: (
     setSug(own);
     const t = setTimeout(async () => {
       try {
-        const j: Osm[] = await (await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunmajsa")}`)).json();
-        const osm: Sug[] = j.filter((x) => x.address?.road && JSON.stringify(x.address).includes("Kiskunmajsa"))
+        const j: Osm[] = await (await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunhalas")}`)).json();
+        const osm: Sug[] = j.filter((x) => x.address?.road && JSON.stringify(x.address).includes("Kiskunhalas"))
           .map((x) => ({ label: `${x.address!.road}${x.address!.house_number ? " " + x.address!.house_number : ""}`, lat: +x.lat, lon: +x.lon }));
         setSug([...own, ...osm.filter((o) => !own.some((w) => w.label === o.label))]);
       } catch {}

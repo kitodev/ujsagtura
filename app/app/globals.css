@@ -33,3 +33,4 @@ pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;
 .sug{position:absolute;left:0;right:0;top:100%;background:var(--card);border:1px solid var(--bd);border-radius:8px;z-index:5;max-height:220px;overflow:auto}
 .sug button{display:block;width:100%;text-align:left;padding:10px;border:0;background:none;color:var(--tx);font:inherit}
 .sug button+button{border-top:1px solid var(--bd)}
+.srch{width:100%;padding:11px 12px;margin-bottom:10px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--tx)}
