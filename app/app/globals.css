@@ -24,3 +24,8 @@ button,input{font:inherit}
 .pin{background:#666;color:#fff;border-radius:50%;width:26px;height:26px;line-height:22px;text-align:center;font-weight:700;font-size:12px;border:2px solid #fff}
 .pin.d{background:var(--ok)}.pin.h{background:#8a6d00}.pin.n{background:var(--mi)}
 pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;font-size:14px}
+.ov{position:fixed;inset:0;background:#0008;display:grid;place-items:center;z-index:2000}
+.dlg{background:var(--card);border-radius:14px;padding:16px;width:min(92vw,460px);display:grid;gap:8px}
+.dlg input,.dlg select{padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx)}
+.row{display:flex;gap:8px}.row button{flex:1;padding:10px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--tx)}
+.row .p{background:var(--ac);color:#fff;border-color:var(--ac)}

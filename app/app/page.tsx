@@ -77,13 +77,23 @@ export default function Page() {
     }
     setMsg("Kész. A nem talált címeket a Supabase táblában (stops.lat/lon) pótolhatod.");
   }
-  async function addStop() {
-    const a = prompt("Cím (pl. Kossuth 5)"); if (!a) return;
-    const n = prompt("Név (nem kötelező)") ?? "";
-    const p = (prompt("Újságok, vesszővel elválasztva") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-    const { data } = await supabase.from("stops").insert({ route_id: route, position: Math.max(0, ...stops.map((x) => x.position)) + 1, address: a, name: n }).select().single();
-    if (data && p.length) await supabase.from("stop_papers").insert(p.map((paper) => ({ stop_id: data.id, paper })));
-    load(route);
+  const [dlg, setDlg] = useState<"" | "stop" | "route">("");
+  const [f, setF] = useState({ r: "", a: "", n: "", p: "", o: "", id: "" });
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
+  async function saveStop() {
+    if (!f.a.trim() || !f.r) return;
+    const { data: m } = await supabase.from("stops").select("position").eq("route_id", f.r).order("position", { ascending: false }).limit(1);
+    const { data } = await supabase.from("stops").insert({ route_id: f.r, position: (m?.[0]?.position ?? 0) + 1, address: f.a.trim(), name: f.n.trim(), note: f.o.trim() }).select().single();
+    const ps = f.p.split(",").map((x) => x.trim()).filter(Boolean);
+    if (data) await supabase.from("stop_papers").insert((ps.length ? ps : ["Újság"]).map((paper) => ({ stop_id: data.id, paper })));
+    setDlg(""); setF({ ...f, a: "", n: "", p: "", o: "" });
+    if (f.r === route) load(route); else setRoute(f.r);
+  }
+  async function saveRoute() {
+    const id = f.id.trim(); if (!id) return;
+    await supabase.from("routes").insert({ id, name: `${id} túra`, note: f.o.trim() });
+    const { data } = await supabase.from("routes").select("*").order("id");
+    setRoutes((data as Route[]) ?? []); setRoute(id); setDlg(""); setF({ ...f, id: "", o: "" });
   }
   function watch() {
     navigator.geolocation?.watchPosition((p) => setGps({ lat: p.coords.latitude, lon: p.coords.longitude }), () => alert("A helymeghatározás nincs engedélyezve"), { enableHighAccuracy: true });
@@ -125,7 +135,8 @@ export default function Page() {
           <button onClick={() => setOnly(!only)}>{only ? "Mind mutat" : "Csak hátralévők"}</button>
           <button onClick={summary}>Összesítő</button>
           <button className={showMap ? "on" : ""} onClick={() => setShowMap(!showMap)}>Térkép</button>
-          <button onClick={addStop}>+ Cím</button>
+          <button onClick={() => { setF({ ...f, r: route }); setDlg("stop"); }}>+ Cím</button>
+          <button onClick={() => setDlg("route")}>+ Túra</button>
         </div>
       </header>
       <main>
@@ -160,6 +171,26 @@ export default function Page() {
           );
         })}
       </main>
+      {dlg && (
+        <div className="ov" onClick={() => setDlg("")}>
+          <div className="dlg" onClick={(e) => e.stopPropagation()}>
+            {dlg === "stop" ? (<>
+              <b>Új cím felvétele</b>
+              <select value={f.r} onChange={set("r")}>{routes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
+              <input placeholder="Cím (pl. Kossuth 5)" value={f.a} onChange={set("a")} />
+              <input placeholder="Név (nem kötelező)" value={f.n} onChange={set("n")} />
+              <input placeholder="Újságok, vesszővel (pl. Petőfi Népe, Fanny)" value={f.p} onChange={set("p")} />
+              <input placeholder="Megjegyzés (nem kötelező)" value={f.o} onChange={set("o")} />
+              <div className="row"><button onClick={() => setDlg("")}>Mégse</button><button className="p" onClick={saveStop}>Mentés</button></div>
+            </>) : (<>
+              <b>Új túra felvétele</b>
+              <input placeholder="Túra száma (pl. 255)" value={f.id} onChange={set("id")} />
+              <input placeholder="Megjegyzés (nem kötelező)" value={f.o} onChange={set("o")} />
+              <div className="row"><button onClick={() => setDlg("")}>Mégse</button><button className="p" onClick={saveRoute}>Mentés</button></div>
+            </>)}
+          </div>
+        </div>
+      )}
     </>
   );
 }
