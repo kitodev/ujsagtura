@@ -16,6 +16,7 @@ export async function GET(req: Request) {
     where s.route_id = ${route} and d.day = ${day}::date`;
   return Response.json({ stops, deliveries: Object.fromEntries(del.map((x) => [x.stop_paper_id, x.status])) });
 }
+
 export async function POST(req: Request) {
   const { route_id, address, name, note, papers, lat, lon } = await req.json();
   const sql = db();
