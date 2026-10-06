@@ -29,3 +29,7 @@ pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;
 .dlg input,.dlg select{padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx)}
 .row{display:flex;gap:8px}.row button{flex:1;padding:10px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--tx)}
 .row .p{background:var(--ac);color:#fff;border-color:var(--ac)}
+.dlg{max-height:90vh;overflow:auto}
+.sug{position:absolute;left:0;right:0;top:100%;background:var(--card);border:1px solid var(--bd);border-radius:8px;z-index:5;max-height:220px;overflow:auto}
+.sug button{display:block;width:100%;text-align:left;padding:10px;border:0;background:none;color:var(--tx);font:inherit}
+.sug button+button{border-top:1px solid var(--bd)}

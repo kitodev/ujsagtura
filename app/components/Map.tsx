@@ -1,5 +1,5 @@
 "use client";
-import { MapContainer, TileLayer, Marker, Tooltip, CircleMarker, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Tooltip, CircleMarker, Polyline, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useEffect } from "react";
@@ -15,11 +15,26 @@ function Fit({ pins }: { pins: Pin[] }) {
   return null;
 }
 
-export default function Map({ pins, me, onPick }: { pins: Pin[]; me: { lat: number; lon: number } | null; onPick: (id: string) => void }) {
+type LL = { lat: number; lon: number };
+function Follow({ me, on }: { me: LL | null; on: boolean }) {
+  const map = useMap();
+  useEffect(() => { if (on && me) map.setView([me.lat, me.lon], Math.max(map.getZoom(), 16)); }, [on, me, map]);
+  return null;
+}
+function FitLine({ line }: { line: [number, number][] | null }) {
+  const map = useMap();
+  useEffect(() => { if (line?.length) map.fitBounds(line, { padding: [30, 30] }); }, [line, map]);
+  return null;
+}
+
+export default function Map({ pins, me, onPick, line, follow }: { pins: Pin[]; me: LL | null; onPick: (id: string) => void; line: [number, number][] | null; follow: boolean }) {
   return (
     <MapContainer center={[46.49, 19.74]} zoom={14} style={{ height: "38vh" }}>
       <TileLayer url="https://tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="© OpenStreetMap" maxZoom={19} />
       <Fit pins={pins} />
+      <FitLine line={line} />
+      <Follow me={me} on={follow} />
+      {line && <Polyline positions={line} pathOptions={{ color: "#1976d2", weight: 6, opacity: 0.8 }} />}
       {pins.map((p) => (
         <Marker key={p.id} position={[p.lat, p.lon]} eventHandlers={{ click: () => onPick(p.id) }}
           icon={L.divIcon({ className: "", html: `<div class="pin ${p.cls}">${p.n}</div>`, iconSize: [26, 26] })}>
