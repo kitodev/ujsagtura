@@ -1,7 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import type { Pin } from "@/components/Map";
 
@@ -21,8 +20,6 @@ const hav = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) =
 
 export default function Page() {
   const day = useMemo(() => new Date().toLocaleDateString("sv-SE"), []);
-  const [session, setSession] = useState<Session | null>(null);
-  const [ready, setReady] = useState(false);
   const [routes, setRoutes] = useState<Route[]>([]);
   const [route, setRoute] = useState("");
   const [stops, setStops] = useState<Stop[]>([]);
@@ -35,18 +32,11 @@ export default function Page() {
   const [sum, setSum] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => { setSession(data.session); setReady(true); });
-    const { data } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => data.subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!session) return;
     supabase.from("routes").select("*").order("id").then(({ data }) => {
       setRoutes((data as Route[]) ?? []);
       setRoute((r) => r || (data?.[0]?.id ?? ""));
     });
-  }, [session]);
+  }, []);
 
   const load = useCallback(async (r: string) => {
     const { data } = await supabase.from("stops").select("*, stop_papers(id,paper)").eq("route_id", r).order("position");
@@ -123,8 +113,6 @@ export default function Page() {
     setSum(`Összesítő – ${day} – ${route}\n\n` + (out.join("\n") || "Nincs hiányzó vagy lemondott újság."));
   }
 
-  if (!ready) return null;
-  if (!session) return <Login />;
   const note = routes.find((r) => r.id === route)?.note;
 
   return (
@@ -138,7 +126,6 @@ export default function Page() {
           <button onClick={summary}>Összesítő</button>
           <button className={showMap ? "on" : ""} onClick={() => setShowMap(!showMap)}>Térkép</button>
           <button onClick={addStop}>+ Cím</button>
-          <button onClick={() => supabase.auth.signOut()}>Kilépés</button>
         </div>
       </header>
       <main>
@@ -177,15 +164,3 @@ export default function Page() {
   );
 }
 
-function Login() {
-  const [email, setEmail] = useState(""), [pw, setPw] = useState(""), [err, setErr] = useState("");
-  return (
-    <div className="login">
-      <b>Újságtúra – belépés</b>
-      <input type="email" placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
-      <input type="password" placeholder="Jelszó" value={pw} onChange={(e) => setPw(e.target.value)} />
-      <button onClick={async () => { const { error } = await supabase.auth.signInWithPassword({ email, password: pw }); if (error) setErr(error.message); }}>Belépés</button>
-      {err && <small>{err}</small>}
-    </div>
-  );
-}

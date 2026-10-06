@@ -19,5 +19,5 @@ do $$ declare t text; begin
   foreach t in array array['routes','stops','stop_papers','deliveries'] loop
     execute format('alter table %I enable row level security', t);
     execute format('drop policy if exists "auth all" on %I', t);
-    execute format('create policy "auth all" on %I for all to authenticated using (true) with check (true)', t);
+    execute format('create policy "auth all" on %I for all to anon, authenticated using (true) with check (true)', t);
   end loop; end $$;
