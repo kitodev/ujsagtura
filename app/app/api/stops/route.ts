@@ -1,33 +1,28 @@
 import { db } from "@/lib/db";
+export const dynamic = "force-dynamic";
 
-export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const { lat, lon } = await req.json();
+export async function GET(req: Request) {
+  const u = new URL(req.url);
+  const route = u.searchParams.get("route"), day = u.searchParams.get("day");
   const sql = db();
-  await sql`update stops set lat = ${lat}, lon = ${lon} where id = ${id}::uuid`;
-  return Response.json({ ok: true });
+  const stops = await sql`
+    select s.id, s.position, s.address, s.name, s.note, s.lat, s.lon,
+      coalesce(json_agg(json_build_object('id', p.id, 'paper', p.paper) order by p.ord) filter (where p.id is not null), '[]') as stop_papers
+    from stops s left join stop_papers p on p.stop_id = s.id
+    where s.route_id = ${route} group by s.id order by s.position`;
+  const del = await sql`
+    select d.stop_paper_id, d.status from deliveries d
+    join stop_papers p on p.id = d.stop_paper_id join stops s on s.id = p.stop_id
+    where s.route_id = ${route} and d.day = ${day}::date`;
+  return Response.json({ stops, deliveries: Object.fromEntries(del.map((x) => [x.stop_paper_id, x.status])) });
 }
-
-export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const { address, name, note, papers, lat, lon } = await req.json();
+export async function POST(req: Request) {
+  const { route_id, address, name, note, papers, lat, lon } = await req.json();
   const sql = db();
-  // cím változásakor a régi koordináta érvénytelen
-  await sql`update stops set
-      lat = case when ${lat ?? null}::float8 is not null then ${lat ?? null}::float8 when address = ${address} then lat else null end,
-      lon = case when ${lon ?? null}::float8 is not null then ${lon ?? null}::float8 when address = ${address} then lon else null end,
-      address = ${address}, name = ${name ?? ""}, note = ${note ?? ""}
-    where id = ${id}::uuid`;
-  await sql`delete from stop_papers where stop_id = ${id}::uuid and paper <> all(${papers}::text[])`;
-  await sql`insert into stop_papers(stop_id, paper)
-    select ${id}::uuid, x from unnest(${papers}::text[]) as x
-    where x not in (select paper from stop_papers where stop_id = ${id}::uuid)`;
-  return Response.json({ ok: true });
-}
-
-export async function DELETE(_: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const sql = db();
-  await sql`delete from stops where id = ${id}::uuid`;
+  const [{ id }] = await sql`
+    insert into stops(route_id, position, address, name, note, lat, lon)
+    values (${route_id}, coalesce((select max(position) from stops where route_id = ${route_id}), 0) + 1, ${address}, ${name ?? ""}, ${note ?? ""}, ${lat ?? null}::float8, ${lon ?? null}::float8)
+    returning id`;
+  await sql`insert into stop_papers(stop_id, paper) select ${id}::uuid, unnest(${papers}::text[])`;
   return Response.json({ ok: true });
 }
