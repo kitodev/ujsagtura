@@ -1,9 +1,13 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
 import type { Pin } from "@/components/Map";
 
+const api = async (u: string, m = "GET", b?: unknown) => {
+  const r = await fetch(u, { method: m, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+};
 const MapView = dynamic(() => import("@/components/Map"), { ssr: false });
 
 type Paper = { id: string; paper: string };
@@ -32,17 +36,13 @@ export default function Page() {
   const [sum, setSum] = useState("");
 
   useEffect(() => {
-    supabase.from("routes").select("*").order("id").then(({ data }) => {
-      setRoutes((data as Route[]) ?? []);
-      setRoute((r) => r || (data?.[0]?.id ?? ""));
-    });
+    api("/api/routes").then((data: Route[]) => { setRoutes(data); setRoute((r) => r || (data[0]?.id ?? "")); }).catch(() => setMsg("Nem érhető el az adatbázis"));
   }, []);
 
   const load = useCallback(async (r: string) => {
-    const { data } = await supabase.from("stops").select("*, stop_papers(id,paper)").eq("route_id", r).order("position");
-    setStops((data as Stop[]) ?? []);
-    const d = await supabase.from("deliveries").select("stop_paper_id,status").eq("day", day);
-    setDv(Object.fromEntries((d.data ?? []).map((x) => [x.stop_paper_id, x.status])));
+    const d = await api(`/api/stops?route=${encodeURIComponent(r)}&day=${day}`);
+    setStops(d.stops);
+    setDv(d.deliveries);
   }, [day]);
   useEffect(() => { if (route) load(route); }, [route, load]);
 
@@ -52,14 +52,13 @@ export default function Page() {
     const n = NEXT[dv[p.id] ?? ""];
     setDv((o) => { const c = { ...o }; if (n) c[p.id] = n; else delete c[p.id]; return c; });
     setLast(s);
-    if (n) await supabase.from("deliveries").upsert({ stop_paper_id: p.id, day, status: n, updated_at: new Date().toISOString() });
-    else await supabase.from("deliveries").delete().eq("stop_paper_id", p.id).eq("day", day);
+    await api("/api/deliveries", "PUT", { ids: [p.id], day, status: n });
   }
   async function allDone(s: Stop) {
-    const rows = s.stop_papers.filter((p) => !dv[p.id]).map((p) => ({ stop_paper_id: p.id, day, status: "delivered" }));
-    setDv((o) => ({ ...o, ...Object.fromEntries(rows.map((r) => [r.stop_paper_id, "delivered"])) }));
+    const ids = s.stop_papers.filter((p) => !dv[p.id]).map((p) => p.id);
+    setDv((o) => ({ ...o, ...Object.fromEntries(ids.map((id) => [id, "delivered"])) }));
     setLast(s);
-    if (rows.length) await supabase.from("deliveries").upsert(rows);
+    if (ids.length) await api("/api/deliveries", "PUT", { ids, day, status: "delivered" });
   }
   async function geocode() {
     for (const s of stops.filter((x) => x.lat == null)) {
@@ -69,31 +68,28 @@ export default function Page() {
         const j = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunmajsa")}`)).json();
         if (j[0]) {
           const lat = +j[0].lat, lon = +j[0].lon;
-          await supabase.from("stops").update({ lat, lon }).eq("id", s.id);
+          await api(`/api/stops/${s.id}`, "PATCH", { lat, lon });
           setStops((p) => p.map((x) => (x.id === s.id ? { ...x, lat, lon } : x)));
         }
       } catch {}
       await new Promise((r) => setTimeout(r, 1100));
     }
-    setMsg("Kész. A nem talált címeket a Supabase táblában (stops.lat/lon) pótolhatod.");
+    setMsg("Kész. A nem talált címek koordinátáit az adatbázisban (stops.lat, stops.lon) pótolhatod.");
   }
   const [dlg, setDlg] = useState<"" | "stop" | "route">("");
   const [f, setF] = useState({ r: "", a: "", n: "", p: "", o: "", id: "" });
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
   async function saveStop() {
     if (!f.a.trim() || !f.r) return;
-    const { data: m } = await supabase.from("stops").select("position").eq("route_id", f.r).order("position", { ascending: false }).limit(1);
-    const { data } = await supabase.from("stops").insert({ route_id: f.r, position: (m?.[0]?.position ?? 0) + 1, address: f.a.trim(), name: f.n.trim(), note: f.o.trim() }).select().single();
     const ps = f.p.split(",").map((x) => x.trim()).filter(Boolean);
-    if (data) await supabase.from("stop_papers").insert((ps.length ? ps : ["Újság"]).map((paper) => ({ stop_id: data.id, paper })));
+    await api("/api/stops", "POST", { route_id: f.r, address: f.a.trim(), name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"] });
     setDlg(""); setF({ ...f, a: "", n: "", p: "", o: "" });
     if (f.r === route) load(route); else setRoute(f.r);
   }
   async function saveRoute() {
     const id = f.id.trim(); if (!id) return;
-    await supabase.from("routes").insert({ id, name: `${id} túra`, note: f.o.trim() });
-    const { data } = await supabase.from("routes").select("*").order("id");
-    setRoutes((data as Route[]) ?? []); setRoute(id); setDlg(""); setF({ ...f, id: "", o: "" });
+    await api("/api/routes", "POST", { id, note: f.o.trim() });
+    setRoutes(await api("/api/routes")); setRoute(id); setDlg(""); setF({ ...f, id: "", o: "" });
   }
   function watch() {
     navigator.geolocation?.watchPosition((p) => setGps({ lat: p.coords.latitude, lon: p.coords.longitude }), () => alert("A helymeghatározás nincs engedélyezve"), { enableHighAccuracy: true });
