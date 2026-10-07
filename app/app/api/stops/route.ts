@@ -33,7 +33,14 @@ const idOf = (req: Request) => new URL(req.url).searchParams.get("id");
 export async function PATCH(req: Request) {
   const body = await req.json();
   const sql = db();
-  if (Array.isArray(body.items)) {
+  if (Array.isArray(body.order)) {
+    const order = body.order as string[];
+    if (order.length) {
+      await sql`update stops s set position = v.position::int
+        from unnest(${order}::uuid[]) with ordinality as v(id, position)
+        where s.id = v.id`;
+    }
+  } else if (Array.isArray(body.items)) {
     // több cím koordinátájának egyszerre történő mentése
     const items = body.items as { id: string; lat: number; lon: number }[];
     await sql`update stops s set lat = v.lat, lon = v.lon

@@ -49,6 +49,7 @@ export default function Page() {
   const [routes, setRoutes] = useState<Route[]>([]);
   const [route, setRoute] = useState("");
   const [stops, setStops] = useState<Stop[]>([]);
+  const [mapStops, setMapStops] = useState<Stop[]>([]);
   const [dv, setDv] = useState<Record<string, string>>({});
   const [only, setOnly] = useState(false);
   const [showMap, setShowMap] = useState(false);
@@ -79,6 +80,14 @@ export default function Page() {
   }, [day]);
   useEffect(() => { if (route) load(route); }, [route, load]);
 
+  useEffect(() => {
+    if (!showMap) return;
+    api(`/api/stops?route=all&day=${day}`).then((d) => {
+      setMapStops(d.stops);
+      setDv((o) => ({ ...o, ...d.deliveries }));
+    }).catch(() => setMsg("A címek betöltése a térképhez nem sikerült."));
+  }, [showMap, day]);
+
   const handled = (s: Stop) => s.stop_papers.every((p) => dv[p.id]);
 
   async function cycle(s: Stop, p: Paper) {
@@ -97,7 +106,7 @@ export default function Page() {
     try {
       setMsg("Címek keresése a térképadatokban… (első alkalommal akár fél percig is eltarthat)");
       const d = await api(`/api/stops?route=all&day=${day}`);
-      const list = (d.stops as Stop[]).filter((s) => all || s.lat == null);
+      const list = (d.stops as Stop[]).filter((s) => all || s.lat == null || s.lon == null);
       if (!list.length) { setMsg("Minden címnek megvan a helye."); return; }
       const r = await api("/api/locate", "POST", { addresses: [...new Set(list.map((s) => s.address))] });
       const res = r.results as Record<string, { lat: number; lon: number; kind: string; street?: string } | null>;
@@ -131,9 +140,22 @@ export default function Page() {
       list.forEach((s) => { const k = res[s.address]?.kind ?? "nincs"; cnt[k] = (cnt[k] ?? 0) + 1; });
       const miss = [...new Set(list.filter((s) => !res[s.address]).map((s) => s.address))];
       setMsg(`Kész: ${cnt["pontos"] ?? 0} pontos, ${cnt["becsült"] ?? 0} becsült, ${(cnt["utca"] ?? 0) + (cnt["terület"] ?? 0)} utcaszintű, ${miss.length} nem található${miss.length ? ": " + miss.slice(0, 10).join("; ") : ""}.${r.houses === false ? " A házszám-adatok most nem töltődtek le, ezért a címek utcaszintűek: próbáld újra később az Újraszámolással." : ""}`);
-      load(route);
+      await load(route);
+      const refreshed = await api(`/api/stops?route=all&day=${day}`);
+      setMapStops(refreshed.stops);
+      setDv((o) => ({ ...o, ...refreshed.deliveries }));
     } catch (e) { setMsg("A térképadatok lekérése nem sikerült: " + (e instanceof Error ? e.message : String(e))); }
   }
+  const mapGeocodeStarted = useRef(false);
+  useEffect(() => {
+    if (!showMap) { mapGeocodeStarted.current = false; return; }
+    if (mapGeocodeStarted.current) return;
+    if (!mapStops.length) return;
+    mapGeocodeStarted.current = true;
+    if (mapStops.some((s) => s.lat == null || s.lon == null)) geocode();
+  // Run once when opening the map, after its all-routes data has loaded.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMap, mapStops.length]);
   const [dlg, setDlg] = useState<"" | "stop" | "route" | "edit" | "xl">("");
   const [f, setF] = useState({ r: "", a: "", n: "", p: "", o: "", id: "", lat: null as number | null, lon: null as number | null });
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
@@ -181,6 +203,40 @@ export default function Page() {
     const id = f.id.trim(); if (!id) return;
     await api("/api/routes", "POST", { id, note: f.o.trim() });
     setRoutes(await api("/api/routes")); setRoute(id); setDlg(""); setF({ ...f, id: "", o: "" });
+  }
+  async function sortByProximity() {
+    try {
+      let source = stops;
+      if (source.some((s) => s.lat == null || s.lon == null)) {
+        await geocode();
+        const refreshed = await api(`/api/stops?route=${encodeURIComponent(route)}&day=${day}`);
+        source = refreshed.stops;
+        setStops(source);
+      }
+      const remaining = source.filter((s): s is Stop & { lat: number; lon: number } => s.lat != null && s.lon != null);
+      const missing = source.filter((s) => s.lat == null || s.lon == null);
+      if (!remaining.length) { setMsg("A közelség szerinti rendezéshez előbb helyadat kell a címekhez."); return; }
+      const ordered: Stop[] = [];
+      let current = gps
+        ? remaining.reduce((best, s) => hav(gps, s) < hav(gps, best) ? s : best)
+        : remaining[0];
+      while (remaining.length) {
+        const index = remaining.findIndex((s) => s.id === current.id);
+        ordered.push(remaining.splice(index, 1)[0]);
+        if (!remaining.length) break;
+        const from = current;
+        current = remaining.reduce((best, s) => hav(from, s) < hav(from, best) ? s : best);
+      }
+      const fullOrder = [...ordered, ...missing];
+      await api("/api/stops", "PATCH", { order: fullOrder.map((s) => s.id) });
+      await load(route);
+      const refreshed = await api(`/api/stops?route=all&day=${day}`);
+      setMapStops(refreshed.stops);
+      setDv((o) => ({ ...o, ...refreshed.deliveries }));
+      setMsg(`A ${ordered.length} helyadattal rendelkező cím közelség szerint sorba rendezve.${missing.length ? ` ${missing.length} koordináta nélküli cím a lista végére került.` : ""}`);
+    } catch (e) {
+      setMsg("A címek rendezése nem sikerült: " + (e instanceof Error ? e.message : String(e)));
+    }
   }
   const [scan, setScan] = useState(false);
   async function saveScan(rows: { route_id: string; address: string; name: string; papers: string[] }[]) {
@@ -254,8 +310,8 @@ export default function Page() {
     return best ? { s: best, d: here ? bd : null } : null;
   }, [stops, dv, here]);
 
-  const pins: Pin[] = stops.flatMap((s, i) => s.lat == null ? [] : [{
-    id: s.id, n: i + 1, lat: s.lat, lon: s.lon!, label: s.address,
+  const pins: Pin[] = mapStops.flatMap((s) => s.lat == null || s.lon == null ? [] : [{
+    id: s.id, n: s.position, lat: s.lat, lon: s.lon, label: `${s.address} · ${s.route_id} túra`,
     cls: handled(s) ? "d" : s.stop_papers.some((p) => dv[p.id]) ? "h" : nx?.s.id === s.id ? "n" : "",
   }]);
   useEffect(() => {
@@ -321,6 +377,7 @@ export default function Page() {
           <button onClick={() => setOnly(!only)}>{only ? "Mind mutat" : "Csak hátralévők"}</button>
           <button onClick={summary}>Összesítő</button>
           <button className={showMap ? "on" : ""} onClick={() => setShowMap(!showMap)}>Térkép</button>
+          <button onClick={sortByProximity} disabled={!stops.length}>Közelség szerinti sorrend</button>
           <button onClick={() => { setF({ ...f, r: route }); setDlg("stop"); }}>+ Cím</button>
           <button onClick={() => setDlg("route")}>+ Túra</button>
           <button onClick={() => setScan(true)}>📷 Beolvasás</button>
@@ -331,7 +388,13 @@ export default function Page() {
         <input className="srch" placeholder="🔎 Keresés: utca, házszám vagy név (minden túrában)" value={q} onChange={(e) => setQ(e.target.value)} />
         {showMap && (
           <>
-            <MapView pins={pins} me={gps} line={nav?.coords ?? routeLine} follow={!!nav} onPick={(id) => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" })} />
+            <MapView pins={pins} me={gps} line={nav?.coords ?? routeLine} follow={!!nav} onPick={(id) => {
+              const selected = mapStops.find((s) => s.id === id);
+              if (!selected) return;
+              if (selected.route_id && selected.route_id !== route) setRoute(selected.route_id);
+              window.setTimeout(() => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
+            }} />
+            <div className="meta" style={{ marginTop: 6 }}>{pins.length} / {mapStops.length} cím helye látható a térképen{pins.length < mapStops.length ? ` · ${mapStops.length - pins.length} hely keresése folyamatban vagy sikertelen` : " · minden túra"}</div>
             {routeLineMsg && <div className="meta" style={{ marginTop: 6 }}>{routeLineMsg}</div>}
             <div className="mt" style={{ margin: "8px 0" }}><button onClick={() => geocode()}>Címek feltérképezése</button><button onClick={() => confirm("Minden cím helyét újraszámolja, a kézzel javítottakat is. Folytatod?") && geocode(true)}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button></div>
             {msg && <div className="meta">{msg}</div>}

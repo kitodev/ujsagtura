@@ -8,10 +8,11 @@ export type Pin = { id: string; n: number; lat: number; lon: number; cls: string
 
 function Fit({ pins }: { pins: Pin[] }) {
   const map = useMap();
+  const points = pins.map((p) => `${p.lat},${p.lon}`).join(";");
   useEffect(() => {
     if (pins.length) map.fitBounds(pins.map((p) => [p.lat, p.lon] as [number, number]), { padding: [30, 30] });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pins.length]);
+  }, [points]);
   return null;
 }
 
