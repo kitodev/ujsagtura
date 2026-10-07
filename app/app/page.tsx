@@ -61,6 +61,8 @@ export default function Page() {
   const [found, setFound] = useState<Stop[]>([]);
   const [tick, setTick] = useState(0);
   const [nav, setNav] = useState<Nav | null>(null);
+  const [routeLine, setRouteLine] = useState<[number, number][] | null>(null);
+  const [routeLineMsg, setRouteLineMsg] = useState("");
   const [idx, setIdx] = useState(0);
   const [voice, setVoice] = useState(false);
 
@@ -256,6 +258,26 @@ export default function Page() {
     id: s.id, n: i + 1, lat: s.lat, lon: s.lon!, label: s.address,
     cls: handled(s) ? "d" : s.stop_papers.some((p) => dv[p.id]) ? "h" : nx?.s.id === s.id ? "n" : "",
   }]);
+  useEffect(() => {
+    if (!showMap || nav) return;
+    const located = stops.filter((s): s is Stop & { lat: number; lon: number } => s.lat != null && s.lon != null);
+    setRouteLine(located.map((s) => [s.lat, s.lon]));
+    const missing = stops.length - located.length;
+    setRouteLineMsg(missing ? `${located.length} / ${stops.length} cím a térképen · ${missing} cím helye hiányzik` : "");
+    if (located.length < 2) return;
+
+    const controller = new AbortController();
+    const coordinates = located.map((s) => `${s.lon},${s.lat}`).join(";");
+    fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`, { signal: controller.signal })
+      .then((r) => { if (!r.ok) throw new Error("Route request failed"); return r.json(); })
+      .then((data) => {
+        const coords = data.routes?.[0]?.geometry?.coordinates as [number, number][] | undefined;
+        if (!coords?.length) throw new Error("No route geometry");
+        setRouteLine(coords.map(([lon, lat]) => [lat, lon]));
+      })
+      .catch((e) => { if (e.name !== "AbortError") setRouteLineMsg((m) => `${m}${m ? " · " : ""}Az úthálózati útvonal nem érhető el; egyenes szakaszok láthatók.`); });
+    return () => controller.abort();
+  }, [showMap, route, stops, nav]);
   const all = stops.flatMap((s) => s.stop_papers);
   const done = all.filter((p) => dv[p.id]).length;
 
@@ -309,7 +331,8 @@ export default function Page() {
         <input className="srch" placeholder="🔎 Keresés: utca, házszám vagy név (minden túrában)" value={q} onChange={(e) => setQ(e.target.value)} />
         {showMap && (
           <>
-            <MapView pins={pins} me={gps} line={nav?.coords ?? null} follow={!!nav} onPick={(id) => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" })} />
+            <MapView pins={pins} me={gps} line={nav?.coords ?? routeLine} follow={!!nav} onPick={(id) => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" })} />
+            {routeLineMsg && <div className="meta" style={{ marginTop: 6 }}>{routeLineMsg}</div>}
             <div className="mt" style={{ margin: "8px 0" }}><button onClick={() => geocode()}>Címek feltérképezése</button><button onClick={() => confirm("Minden cím helyét újraszámolja, a kézzel javítottakat is. Folytatod?") && geocode(true)}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button></div>
             {msg && <div className="meta">{msg}</div>}
             {nx && !nav && <div className="nxb">Legközelebbi: <b>{nx.s.address}</b>{nx.d != null && ` (${Math.round(nx.d)} m)`} · <button className="all" style={{ color: "#fff", borderColor: "#fff" }} onClick={() => startNav(nx.s)}>Navigálás</button></div>}
