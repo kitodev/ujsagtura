@@ -29,16 +29,23 @@ function stepText(s: Step) {
   if (!m.modifier || m.modifier === "straight" || m.type === "continue") return `Haladj egyenesen${n}`;
   return `Fordulj ${MOD[m.modifier] ?? "tovább"}${n}`;
 }
-// Csak kiskunhalasi cím fogadható el: a találatnak Kiskunhalast kell tartalmaznia
-async function verify(addr: string): Promise<{ lat: number; lon: number } | null> {
-  const q = geoKey(addr);
-  try {
-    const j: { lat: string; lon: string; display_name: string }[] = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunhalas")}`)).json();
-    const h = j.find((x) => x.display_name.includes("Kiskunhalas"));
-    return h ? { lat: +h.lat, lon: +h.lon } : null;
-  } catch { return null; }
-}
 const geoKey = (a: string) => a.replace(/\(.*?\)/g, "").split("–")[0].replace(/\.$/, "").trim();
+// Csak kiskunhalasi találat fogadható el. Sorrend: teljes cím, rövidítés nélkül, végül csak az utca (közelítő hely)
+async function verify(addr: string): Promise<{ lat: number; lon: number; exact: boolean } | null> {
+  const base = geoKey(addr);
+  const noAbbr = base.split(" ").filter((t) => !/^\p{L}{1,2}\.$/u.test(t)).join(" ");
+  const street = noAbbr.replace(/\s+\d[\w/-]*$/, "");
+  const tries = [...new Set([base, noAbbr, street])];
+  for (let n = 0; n < tries.length; n++) {
+    if (n > 0) await new Promise((r) => setTimeout(r, 1100));
+    try {
+      const j: { lat: string; lon: string; display_name: string }[] = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=hu&q=${encodeURIComponent(tries[n] + ", Kiskunhalas")}`)).json();
+      const h = j.find((x) => x.display_name.includes("Kiskunhalas"));
+      if (h) return { lat: +h.lat, lon: +h.lon, exact: tries[n] === base };
+    } catch {}
+  }
+  return null;
+}
 const hav = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
   const r = Math.PI / 180, x = (b.lat - a.lat) * r, y = (b.lon - a.lon) * r;
   const h = Math.sin(x / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(y / 2) ** 2;
@@ -93,21 +100,21 @@ export default function Page() {
     if (ids.length) await api("/api/deliveries", "PUT", { ids, day, status: "delivered" });
   }
   async function geocode() {
-    for (const s of stops.filter((x) => x.lat == null)) {
-      const q = geoKey(s.address);
-      setMsg(`Keresés: ${q}`);
-      try {
-        const j = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunhalas")}`)).json();
-        const h = (j as { lat: string; lon: string; display_name: string }[]).find((x) => x.display_name.includes("Kiskunhalas"));
-        if (h) {
-          const lat = +h.lat, lon = +h.lon;
-          await api(`/api/stops/${s.id}`, "PATCH", { lat, lon });
-          setStops((p) => p.map((x) => (x.id === s.id ? { ...x, lat, lon } : x)));
-        }
-      } catch {}
+    const d = await api(`/api/stops?route=all&day=${day}`);
+    const groups = new Map<string, Stop[]>();
+    (d.stops as Stop[]).filter((x) => x.lat == null).forEach((s) => groups.set(geoKey(s.address), [...(groups.get(geoKey(s.address)) ?? []), s]));
+    let ok = 0, approx = 0, fail = 0, i = 0;
+    for (const [k, list] of groups) {
+      setMsg(`Keresés ${++i}/${groups.size}: ${k}`);
+      const v = await verify(k);
+      if (v) {
+        for (const s of list) await api(`/api/stops/${s.id}`, "PATCH", { lat: v.lat, lon: v.lon });
+        if (v.exact) ok++; else approx++;
+      } else fail++;
       await new Promise((r) => setTimeout(r, 1100));
     }
-    setMsg("Kész. A nem talált címek koordinátáit az adatbázisban (stops.lat, stops.lon) pótolhatod.");
+    setMsg(`Kész: ${ok} pontos, ${approx} csak utcaszinten, ${fail} nem található.`);
+    load(route);
   }
   const [dlg, setDlg] = useState<"" | "stop" | "route" | "edit" | "xl">("");
   const [f, setF] = useState({ r: "", a: "", n: "", p: "", o: "", id: "", lat: null as number | null, lon: null as number | null });
@@ -120,8 +127,8 @@ export default function Page() {
       setMsg("Cím ellenőrzése…");
       const v = await verify(f.a);
       setMsg("");
-      if (!v) { alert("Ez a cím nem található Kiskunhalason (vagy nincs internet az ellenőrzéshez). Válassz a javaslatok közül, vagy pontosítsd a címet."); return; }
-      lat = v.lat; lon = v.lon;
+      if (!v && !confirm("Ez a cím nem található Kiskunhalason (vagy nincs internet). Csak kiskunhalasi cím vehető fel. Mentsem pontos hely nélkül?")) return;
+      if (v) { lat = v.lat; lon = v.lon; }
     }
     await api("/api/stops", "POST", { route_id: f.r, address: f.a.trim(), name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon });
     setDlg(""); setF({ ...f, a: "", n: "", p: "", o: "", lat: null, lon: null });
@@ -141,8 +148,8 @@ export default function Page() {
     let { lat, lon } = f;
     if (lat == null && a !== editOrig) {
       const v = await verify(a);
-      if (!v) { alert("Ez a cím nem található Kiskunhalason (vagy nincs internet az ellenőrzéshez). Válassz a javaslatok közül, vagy pontosítsd a címet."); return; }
-      lat = v.lat; lon = v.lon;
+      if (!v && !confirm("Ez a cím nem található Kiskunhalason (vagy nincs internet). Csak kiskunhalasi cím vehető fel. Mentsem pontos hely nélkül?")) return;
+      if (v) { lat = v.lat; lon = v.lon; }
     }
     await api(`/api/stops/${editId}`, "PUT", { address: a, name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon });
     setDlg(""); load(route);
@@ -160,16 +167,11 @@ export default function Page() {
   const [scan, setScan] = useState(false);
   async function saveScan(rows: { route_id: string; address: string; name: string; papers: string[] }[]) {
     const have = new Set(stops.map((s) => s.address.toLowerCase()));
-    const bad: string[] = [];
     for (const r of rows) {
       if (r.route_id === route && have.has(r.address.toLowerCase())) continue;
-      const v = await verify(r.address);
-      if (!v) { bad.push(r.address); continue; }
-      await api("/api/stops", "POST", { ...r, note: "", lat: v.lat, lon: v.lon });
-      await new Promise((x) => setTimeout(x, 1100));
+      await api("/api/stops", "POST", { ...r, note: "" });
     }
-    if (bad.length) alert("Nem található Kiskunhalason, ezért nem lett felvéve:\n" + bad.join("\n"));
-    setScan(false); setRoute(rows[0].route_id); load(rows[0].route_id);
+    setScan(false); setRoute(rows[0].route_id); await load(rows[0].route_id); geocode();
   }
   async function startNav(to: Stop) {
     if (!gps) { alert("Előbb kapcsold be a „Saját helyzet” gombot."); return; }
