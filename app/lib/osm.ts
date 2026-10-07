@@ -98,7 +98,7 @@ export function locateIn(ix: Index, addr: string): Found | null {
 }
 
 // --- Overpass lekérés (több tükörszerverrel). Két lépésben: 1) utcák és területek (kicsi), 2) házszámok csak a kellő utcákra ---
-const EP = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://overpass.private.coffee/api/interpreter"];
+const EP = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 const AREA = `area["boundary"="administrative"]["admin_level"="8"]["name"="Kiskunhalas"]->.a;`;
 const BBOX = "(46.36,19.38,46.52,19.62)";
 
@@ -124,13 +124,14 @@ async function overpass(q: string, ms: number, until: number): Promise<El[]> {
 let cache: { t: number; ix: Index } | null = null;
 export async function getIndex(): Promise<Index> {
   if (cache && Date.now() - cache.t < 30 * 60 * 1000) return cache.ix;
-  const until = Date.now() + 30000;
-  const q = (area: boolean) => `[out:json][timeout:40]; ${area ? AREA : ""} (way["highway"]["name"]${area ? "(area.a)" : BBOX}; nwr["place"]["name"]${area ? "(area.a)" : BBOX};); out center tags;`;
-  let bbox = false;
-  let els = await overpass(q(true), 20000, until);
-  if (!els.some((e) => e.tags?.highway)) { els = await overpass(q(false), 20000, until); bbox = true; }
+  // A bounded query is much lighter than resolving the city boundary relation,
+  // and still covers Kiskunhalas plus its outskirts. Leave enough time to try
+  // all three mirrors before the API route's 60 second execution limit.
+  const until = Date.now() + 48000;
+  const q = `[out:json][timeout:20]; (way["highway"]["name"]${BBOX}; nwr["place"]["name"]${BBOX};); out center tags;`;
+  const els = await overpass(q, 16000, until);
   const ix = buildIndex(els);
-  ix.bbox = bbox;
+  ix.bbox = true;
   if (ix.streets.size) cache = { t: Date.now(), ix };
   return ix;
 }
