@@ -30,21 +30,13 @@ function stepText(s: Step) {
   return `Fordulj ${MOD[m.modifier] ?? "tovább"}${n}`;
 }
 const geoKey = (a: string) => a.replace(/\(.*?\)/g, "").split("–")[0].replace(/\.$/, "").trim();
-// Csak kiskunhalasi találat fogadható el. Sorrend: teljes cím, rövidítés nélkül, végül csak az utca (közelítő hely)
-async function verify(addr: string): Promise<{ lat: number; lon: number; exact: boolean } | null> {
-  const base = geoKey(addr);
-  const noAbbr = base.split(" ").filter((t) => !/^\p{L}{1,2}\.$/u.test(t)).join(" ");
-  const street = noAbbr.replace(/\s+\d[\w/-]*$/, "");
-  const tries = [...new Set([base, noAbbr, street])];
-  for (let n = 0; n < tries.length; n++) {
-    if (n > 0) await new Promise((r) => setTimeout(r, 1100));
-    try {
-      const j: { lat: string; lon: string; display_name: string }[] = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=hu&q=${encodeURIComponent(tries[n] + ", Kiskunhalas")}`)).json();
-      const h = j.find((x) => x.display_name.includes("Kiskunhalas"));
-      if (h) return { lat: +h.lat, lon: +h.lon, exact: tries[n] === base };
-    } catch {}
-  }
-  return null;
+// Cím ellenőrzése és elhelyezése a kiskunhalasi térképadatok alapján (szerver oldalon)
+async function verify(addr: string): Promise<{ lat: number; lon: number } | null> {
+  try {
+    const r = await api("/api/locate", "POST", { addresses: [addr] });
+    const x = r.results[addr];
+    return x ? { lat: x.lat, lon: x.lon } : null;
+  } catch { return null; }
 }
 const hav = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
   const r = Math.PI / 180, x = (b.lat - a.lat) * r, y = (b.lon - a.lon) * r;
@@ -99,22 +91,22 @@ export default function Page() {
     setLast(s);
     if (ids.length) await api("/api/deliveries", "PUT", { ids, day, status: "delivered" });
   }
-  async function geocode() {
-    const d = await api(`/api/stops?route=all&day=${day}`);
-    const groups = new Map<string, Stop[]>();
-    (d.stops as Stop[]).filter((x) => x.lat == null).forEach((s) => groups.set(geoKey(s.address), [...(groups.get(geoKey(s.address)) ?? []), s]));
-    let ok = 0, approx = 0, fail = 0, i = 0;
-    for (const [k, list] of groups) {
-      setMsg(`Keresés ${++i}/${groups.size}: ${k}`);
-      const v = await verify(k);
-      if (v) {
-        for (const s of list) await api(`/api/stops?id=${s.id}`, "PATCH", { lat: v.lat, lon: v.lon });
-        if (v.exact) ok++; else approx++;
-      } else fail++;
-      await new Promise((r) => setTimeout(r, 1100));
-    }
-    setMsg(`Kész: ${ok} pontos, ${approx} csak utcaszinten, ${fail} nem található.`);
-    load(route);
+  async function geocode(all = false) {
+    try {
+      setMsg("Címek keresése a térképadatokban… (első alkalommal akár fél percig is eltarthat)");
+      const d = await api(`/api/stops?route=all&day=${day}`);
+      const list = (d.stops as Stop[]).filter((s) => all || s.lat == null);
+      if (!list.length) { setMsg("Minden címnek megvan a helye."); return; }
+      const r = await api("/api/locate", "POST", { addresses: [...new Set(list.map((s) => s.address))] });
+      const res = r.results as Record<string, { lat: number; lon: number; kind: string } | null>;
+      const items = list.flatMap((s) => (res[s.address] ? [{ id: s.id, lat: res[s.address]!.lat, lon: res[s.address]!.lon }] : []));
+      if (items.length) await api("/api/stops", "PATCH", { items });
+      const cnt: Record<string, number> = {};
+      list.forEach((s) => { const k = res[s.address]?.kind ?? "nincs"; cnt[k] = (cnt[k] ?? 0) + 1; });
+      const miss = [...new Set(list.filter((s) => !res[s.address]).map((s) => s.address))];
+      setMsg(`Kész: ${cnt["pontos"] ?? 0} pontos, ${cnt["becsült"] ?? 0} becsült, ${(cnt["utca"] ?? 0) + (cnt["terület"] ?? 0)} utcaszintű, ${miss.length} nem található${miss.length ? ": " + miss.slice(0, 10).join("; ") : ""}.`);
+      load(route);
+    } catch (e) { setMsg("A térképadatok lekérése nem sikerült: " + (e instanceof Error ? e.message : String(e))); }
   }
   const [dlg, setDlg] = useState<"" | "stop" | "route" | "edit" | "xl">("");
   const [f, setF] = useState({ r: "", a: "", n: "", p: "", o: "", id: "", lat: null as number | null, lon: null as number | null });
@@ -294,7 +286,7 @@ export default function Page() {
         {showMap && (
           <>
             <MapView pins={pins} me={gps} line={nav?.coords ?? null} follow={!!nav} onPick={(id) => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" })} />
-            <div className="mt" style={{ margin: "8px 0" }}><button onClick={geocode}>Címek feltérképezése</button><button onClick={watch}>Saját helyzet</button></div>
+            <div className="mt" style={{ margin: "8px 0" }}><button onClick={() => geocode()}>Címek feltérképezése</button><button onClick={() => confirm("Minden cím helyét újraszámolja, a kézzel javítottakat is. Folytatod?") && geocode(true)}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button></div>
             {msg && <div className="meta">{msg}</div>}
             {nx && !nav && <div className="nxb">Legközelebbi: <b>{nx.s.address}</b>{nx.d != null && ` (${Math.round(nx.d)} m)`} · <button className="all" style={{ color: "#fff", borderColor: "#fff" }} onClick={() => startNav(nx.s)}>Navigálás</button></div>}
             {nav && (() => {

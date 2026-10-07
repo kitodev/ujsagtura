@@ -31,10 +31,17 @@ export async function POST(req: Request) {
 const idOf = (req: Request) => new URL(req.url).searchParams.get("id");
 
 export async function PATCH(req: Request) {
-  const id = idOf(req);
-  const { lat, lon } = await req.json();
+  const body = await req.json();
   const sql = db();
-  await sql`update stops set lat = ${lat}, lon = ${lon} where id = ${id}::uuid`;
+  if (Array.isArray(body.items)) {
+    // több cím koordinátájának egyszerre történő mentése
+    const items = body.items as { id: string; lat: number; lon: number }[];
+    await sql`update stops s set lat = v.lat, lon = v.lon
+      from (select unnest(${items.map((x) => x.id)}::uuid[]) as id, unnest(${items.map((x) => x.lat)}::float8[]) as lat, unnest(${items.map((x) => x.lon)}::float8[]) as lon) v
+      where s.id = v.id`;
+  } else {
+    await sql`update stops set lat = ${body.lat}, lon = ${body.lon} where id = ${idOf(req)}::uuid`;
+  }
   return Response.json({ ok: true });
 }
 
