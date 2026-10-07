@@ -108,7 +108,7 @@ export default function Page() {
       setMsg(`Keresés ${++i}/${groups.size}: ${k}`);
       const v = await verify(k);
       if (v) {
-        for (const s of list) await api(`/api/stops/${s.id}`, "PATCH", { lat: v.lat, lon: v.lon });
+        for (const s of list) await api(`/api/stops?id=${s.id}`, "PATCH", { lat: v.lat, lon: v.lon });
         if (v.exact) ok++; else approx++;
       } else fail++;
       await new Promise((r) => setTimeout(r, 1100));
@@ -151,12 +151,12 @@ export default function Page() {
       if (!v && !confirm("Ez a cím nem található Kiskunhalason (vagy nincs internet). Csak kiskunhalasi cím vehető fel. Mentsem pontos hely nélkül?")) return;
       if (v) { lat = v.lat; lon = v.lon; }
     }
-    await api(`/api/stops/${editId}`, "PUT", { address: a, name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon });
+    await api(`/api/stops?id=${editId}`, "PUT", { address: a, name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon });
     setDlg(""); load(route);
   }
   async function delStop() {
     if (!confirm("Biztosan törlöd ezt a címet?")) return;
-    await api(`/api/stops/${editId}`, "DELETE");
+    await api(`/api/stops?id=${editId}`, "DELETE");
     setDlg(""); load(route);
   }
   async function saveRoute() {
