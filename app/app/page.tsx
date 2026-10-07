@@ -98,9 +98,33 @@ export default function Page() {
       const list = (d.stops as Stop[]).filter((s) => all || s.lat == null);
       if (!list.length) { setMsg("Minden címnek megvan a helye."); return; }
       const r = await api("/api/locate", "POST", { addresses: [...new Set(list.map((s) => s.address))] });
-      const res = r.results as Record<string, { lat: number; lon: number; kind: string } | null>;
+      const res = r.results as Record<string, { lat: number; lon: number; kind: string; street?: string } | null>;
+      // 1. lépés: az utcák alapján elhelyezett címek mentése
       const items = list.flatMap((s) => (res[s.address] ? [{ id: s.id, lat: res[s.address]!.lat, lon: res[s.address]!.lon }] : []));
       if (items.length) await api("/api/stops", "PATCH", { items });
+      // 2. lépés: pontosítás – a teljes hivatalos utcanév + házszám keresése (egész cím)
+      const house = (a: string) => a.replace(/\(.*?\)/g, "").split("–")[0].trim().match(/\s(\d[\w/-]*)\.?$/)?.[1] ?? null;
+      const refine = list.filter((s) => res[s.address] && res[s.address]!.kind !== "pontos" && res[s.address]!.street && house(s.address));
+      const seen = new Map<string, { lat: number; lon: number } | null>();
+      const upd: { id: string; lat: number; lon: number }[] = [];
+      let n = 0;
+      for (const s of refine) {
+        setMsg(`Pontosítás ${++n}/${refine.length}: ${res[s.address]!.street} ${house(s.address)}`);
+        if (!seen.has(s.address)) {
+          let hit: { lat: number; lon: number } | null = null;
+          try {
+            const h = house(s.address)!;
+            const j: { lat: string; lon: string; display_name: string; address?: { house_number?: string } }[] = await (await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=5&countrycodes=hu&street=${encodeURIComponent(h + " " + res[s.address]!.street)}&city=Kiskunhalas`)).json();
+            const m = j.find((x) => x.display_name.includes("Kiskunhalas") && (x.address?.house_number ?? "").toLowerCase() === h.toLowerCase());
+            if (m) hit = { lat: +m.lat, lon: +m.lon };
+          } catch {}
+          seen.set(s.address, hit);
+          await new Promise((x) => setTimeout(x, 1100));
+        }
+        const hit = seen.get(s.address);
+        if (hit) { upd.push({ id: s.id, ...hit }); res[s.address]!.kind = "pontos"; }
+      }
+      if (upd.length) await api("/api/stops", "PATCH", { items: upd });
       const cnt: Record<string, number> = {};
       list.forEach((s) => { const k = res[s.address]?.kind ?? "nincs"; cnt[k] = (cnt[k] ?? 0) + 1; });
       const miss = [...new Set(list.filter((s) => !res[s.address]).map((s) => s.address))];

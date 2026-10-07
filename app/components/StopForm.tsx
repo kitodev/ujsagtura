@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 
 export type Meta = { papers: string[]; addresses: string[]; names: string[] };
 type F = { a: string; n: string; p: string; o: string; lat: number | null; lon: number | null };
-type Sug = { label: string; lat?: number; lon?: number; own?: boolean };
+type Sug = { label: string; lat?: number; lon?: number; own?: boolean; approx?: boolean };
 type Osm = { lat: string; lon: string; address?: { road?: string; house_number?: string } };
 
 // Cím / név / újságok űrlap: beírható és választható is (elgépelés ellen)
@@ -25,11 +25,16 @@ export default function StopForm<T extends F>({ f, setF, meta }: { f: T; setF: (
     if (!open || q.length < 3) { setSug([]); return; }
     const own: Sug[] = meta.addresses.filter((a) => a.toLowerCase().includes(q.toLowerCase())).slice(0, 4).map((label) => ({ label, own: true }));
     setSug(own);
+    const typed = q.match(/\s(\d[\w/-]*)\.?$/)?.[1];
     const t = setTimeout(async () => {
       try {
         const j: Osm[] = await (await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=hu&q=${encodeURIComponent(q + ", Kiskunhalas")}`)).json();
         const osm: Sug[] = j.filter((x) => x.address?.road && JSON.stringify(x.address).includes("Kiskunhalas"))
-          .map((x) => ({ label: `${x.address!.road}${x.address!.house_number ? " " + x.address!.house_number : ""}`, lat: +x.lat, lon: +x.lon }));
+          .map((x) => {
+            // a beírt házszám megmarad akkor is, ha a térképen nincs külön házszámos találat
+            const no = x.address!.house_number ?? typed;
+            return { label: `${x.address!.road}${no ? " " + no : ""}`, lat: +x.lat, lon: +x.lon, approx: !x.address!.house_number && !!typed };
+          });
         setSug([...own, ...osm.filter((o) => !own.some((w) => w.label === o.label))]);
       } catch {}
     }, 700);
@@ -48,7 +53,7 @@ export default function StopForm<T extends F>({ f, setF, meta }: { f: T; setF: (
           <div className="sug">
             {sug.map((s) => (
               <button type="button" key={s.label + (s.own ? "o" : "m")} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(s)}>
-                {s.label} <small>{s.own ? "(már felvett)" : "(térkép)"}</small>
+                {s.label} <small>{s.own ? "(már felvett)" : s.approx ? "(térkép – házszám nélkül, csak az utca helye)" : "(térkép)"}</small>
               </button>
             ))}
           </div>

@@ -15,8 +15,12 @@ export async function POST(req: Request) {
       if (st && !ix.loaded.has(norm(st.name))) wanted.add(norm(st.name));
     }
     const houses = wanted.size ? await loadAddresses(ix, [...wanted], Date.now() + 22000) : true;
-    const results: Record<string, Found | null> = {};
-    for (const a of new Set(addresses)) results[a] = locateIn(ix, a);
+    const results: Record<string, (Found & { street?: string }) | null> = {};
+    for (const a of new Set(addresses)) {
+      const f = locateIn(ix, a);
+      const st = findStreet(ix, toks(parseAddr(a).street));
+      results[a] = f ? { ...f, street: st?.name } : null;
+    }
     return Response.json({ results, houses });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
