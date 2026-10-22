@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Pin } from "@/components/Map";
 import Scan from "@/components/Scan";
 import StopForm, { type Meta } from "@/components/StopForm";
+import { HIDDEN_ROUTES } from "@/lib/hidden";
 
 const api = async (u: string, m = "GET", b?: unknown) => {
   const r = await fetch(u, { method: m, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined });
@@ -38,11 +39,63 @@ async function verify(addr: string): Promise<{ lat: number; lon: number } | null
     return x ? { lat: x.lat, lon: x.lon } : null;
   } catch { return null; }
 }
+// Ideiglenesen kivett túrák listája: lib/hidden.ts
+const HIDDEN = new Set(HIDDEN_ROUTES);
+const visRoutes = <T extends { id: string }>(xs: T[]) => xs.filter((r) => !HIDDEN.has(r.id));
+const visStops = <T extends { route_id?: string }>(xs: T[]) => xs.filter((s) => !HIDDEN.has(s.route_id ?? ""));
+async function nominatim(addr: string): Promise<{ lat: number; lon: number; kind: string } | null> {
+  try {
+    const j: { lat: string; lon: string; address?: { house_number?: string; road?: string } }[] = await (await fetch(
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=1&countrycodes=hu&viewbox=19.38,46.52,19.62,46.36&bounded=1&q=${encodeURIComponent(geoKey(addr) + ", Kiskunhalas")}`)).json();
+    const m = j[0];
+    return m ? { lat: +m.lat, lon: +m.lon, kind: m.address?.house_number ? "pontos" : "utca" } : null;
+  } catch { return null; }
+}
 const hav = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
   const r = Math.PI / 180, x = (b.lat - a.lat) * r, y = (b.lon - a.lon) * r;
   const h = Math.sin(x / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(y / 2) ** 2;
   return 12742000 * Math.asin(Math.sqrt(h));
 };
+
+// Útvonal-sorrend: legközelebbi szomszéd módszer, majd 2-opt javítás (kiveszi a kereszteződő, visszafelé menő szakaszokat).
+// Ha van saját helyzet (GPS), onnan indul; ha nincs, azt a kezdőpontot választja, amelyikkel a legrövidebb az út.
+type LL = { lat: number; lon: number };
+function bestOrder<T extends LL>(pts: T[], start: LL | null): T[] {
+  const n = pts.length;
+  if (n < 2) return pts.slice();
+  const D = pts.map((a) => pts.map((b) => hav(a, b)));
+  const S = start ? pts.map((p) => hav(start, p)) : null;
+  const len = (o: number[]) => (S ? S[o[0]] : 0) + o.slice(1).reduce((x, v, i) => x + D[o[i]][v], 0);
+  const nn = (first: number) => {
+    const used = new Set([first]), o = [first];
+    while (o.length < n) {
+      const l = o[o.length - 1];
+      let b = -1, bd = Infinity;
+      for (let j = 0; j < n; j++) if (!used.has(j) && D[l][j] < bd) { bd = D[l][j]; b = j; }
+      o.push(b); used.add(b);
+    }
+    return o;
+  };
+  const twoOpt = (o: number[]) => {
+    for (let round = 0, improved = true; improved && round < 50; round++) {
+      improved = false;
+      for (let i = 0; i < n - 1; i++) for (let j = i + 1; j < n; j++) {
+        const pre = (k: number) => (i === 0 ? (S ? S[k] : 0) : D[o[i - 1]][k]);
+        const post = (k: number) => (j === n - 1 ? 0 : D[k][o[j + 1]]);
+        if (pre(o[j]) + post(o[i]) < pre(o[i]) + post(o[j]) - 0.5) {
+          o.splice(i, j - i + 1, ...o.slice(i, j + 1).reverse());
+          improved = true;
+        }
+      }
+    }
+    return o;
+  };
+  const all = [...Array(n).keys()];
+  const starts = S ? [S.indexOf(Math.min(...S))] : n > 60 ? all.filter((i) => i % Math.ceil(n / 40) === 0) : all;
+  let best = all, bl = Infinity;
+  for (const f of starts) { const o = twoOpt(nn(f)); const l = len(o); if (l < bl) { bl = l; best = o; } }
+  return best.map((i) => pts[i]);
+}
 
 export default function Page() {
   const day = useMemo(() => new Date().toLocaleDateString("sv-SE"), []);
@@ -68,7 +121,7 @@ export default function Page() {
   const [voice, setVoice] = useState(false);
 
   useEffect(() => {
-    api("/api/routes").then((data: Route[]) => { setRoutes(data); setRoute((r) => r || (data[0]?.id ?? "")); }).catch(() => setMsg("Nem érhető el az adatbázis"));
+    api("/api/routes").then((all: Route[]) => { const data = visRoutes(all); setRoutes(data); setRoute((r) => r || (data[0]?.id ?? "")); }).catch(() => setMsg("Nem érhető el az adatbázis"));
   }, []);
 
   const load = useCallback(async (r: string) => {
@@ -83,7 +136,7 @@ export default function Page() {
   useEffect(() => {
     if (!showMap) return;
     api(`/api/stops?route=all&day=${day}`).then((d) => {
-      setMapStops(d.stops);
+      setMapStops(visStops(d.stops));
       setDv((o) => ({ ...o, ...d.deliveries }));
     }).catch(() => setMsg("A címek betöltése a térképhez nem sikerült."));
   }, [showMap, day]);
@@ -102,14 +155,29 @@ export default function Page() {
     setLast(s);
     if (ids.length) await api("/api/deliveries", "PUT", { ids, day, status: "delivered" });
   }
-  async function geocode(all = false) {
+  // Csak az adott túra címeit térképezi fel (alapból a kiválasztott túra)
+  async function geocode(all = false, target = route) {
     try {
       setMsg("Címek keresése a térképadatokban… (első alkalommal akár fél percig is eltarthat)");
-      const d = await api(`/api/stops?route=all&day=${day}`);
+      const d = await api(`/api/stops?route=${encodeURIComponent(target)}&day=${day}`);
       const list = (d.stops as Stop[]).filter((s) => all || s.lat == null || s.lon == null);
       if (!list.length) { setMsg("Minden címnek megvan a helye."); return; }
-      const r = await api("/api/locate", "POST", { addresses: [...new Set(list.map((s) => s.address))] });
-      const res = r.results as Record<string, { lat: number; lon: number; kind: string; street?: string } | null>;
+      let res: Record<string, { lat: number; lon: number; kind: string; street?: string } | null>;
+      let houses: boolean | undefined;
+      try {
+        const r = await api("/api/locate", "POST", { addresses: [...new Set(list.map((s) => s.address))] });
+        res = r.results; houses = r.houses;
+      } catch {
+        // Tartalék: ha az OpenStreetMap utcaadat-szerver nem érhető el, címenként keresünk (Nominatim, kb. 1 mp / cím)
+        res = {};
+        const uniq = [...new Set(list.map((s) => s.address))];
+        let i = 0;
+        for (const a of uniq) {
+          setMsg(`Az utcaadat-szerver most nem érhető el, címenként keresem: ${++i}/${uniq.length} – ${a}`);
+          res[a] = await nominatim(a);
+          await new Promise((x) => setTimeout(x, 1100));
+        }
+      }
       // 1. lépés: az utcák alapján elhelyezett címek mentése
       const items = list.flatMap((s) => (res[s.address] ? [{ id: s.id, lat: res[s.address]!.lat, lon: res[s.address]!.lon }] : []));
       if (items.length) await api("/api/stops", "PATCH", { items });
@@ -139,10 +207,10 @@ export default function Page() {
       const cnt: Record<string, number> = {};
       list.forEach((s) => { const k = res[s.address]?.kind ?? "nincs"; cnt[k] = (cnt[k] ?? 0) + 1; });
       const miss = [...new Set(list.filter((s) => !res[s.address]).map((s) => s.address))];
-      setMsg(`Kész: ${cnt["pontos"] ?? 0} pontos, ${cnt["becsült"] ?? 0} becsült, ${(cnt["utca"] ?? 0) + (cnt["terület"] ?? 0)} utcaszintű, ${miss.length} nem található${miss.length ? ": " + miss.slice(0, 10).join("; ") : ""}.${r.houses === false ? " A házszám-adatok most nem töltődtek le, ezért a címek utcaszintűek: próbáld újra később az Újraszámolással." : ""}`);
-      await load(route);
+      setMsg(`Kész: ${cnt["pontos"] ?? 0} pontos, ${cnt["becsült"] ?? 0} becsült, ${(cnt["utca"] ?? 0) + (cnt["terület"] ?? 0)} utcaszintű, ${miss.length} nem található${miss.length ? ": " + miss.slice(0, 10).join("; ") : ""}.${houses === false ? " A házszám-adatok most nem töltődtek le, ezért a címek utcaszintűek: próbáld újra később az Újraszámolással." : ""}`);
+      await load(target);
       const refreshed = await api(`/api/stops?route=all&day=${day}`);
-      setMapStops(refreshed.stops);
+      setMapStops(visStops(refreshed.stops));
       setDv((o) => ({ ...o, ...refreshed.deliveries }));
     } catch (e) { setMsg("A térképadatok lekérése nem sikerült: " + (e instanceof Error ? e.message : String(e))); }
   }
@@ -152,7 +220,7 @@ export default function Page() {
     if (mapGeocodeStarted.current) return;
     if (!mapStops.length) return;
     mapGeocodeStarted.current = true;
-    if (mapStops.some((s) => s.lat == null || s.lon == null)) geocode();
+    if (stops.some((s) => s.lat == null || s.lon == null)) mapAndSort();
   // Run once when opening the map, after its all-routes data has loaded.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showMap, mapStops.length]);
@@ -202,50 +270,50 @@ export default function Page() {
   async function saveRoute() {
     const id = f.id.trim(); if (!id) return;
     await api("/api/routes", "POST", { id, note: f.o.trim() });
-    setRoutes(await api("/api/routes")); setRoute(id); setDlg(""); setF({ ...f, id: "", o: "" });
+    setRoutes(visRoutes(await api("/api/routes"))); setRoute(id); setDlg(""); setF({ ...f, id: "", o: "" });
   }
-  async function sortByProximity() {
+  async function sortByProximity(skipGeocode = false) {
     try {
-      let source = stops;
-      if (source.some((s) => s.lat == null || s.lon == null)) {
-        await geocode();
-        const refreshed = await api(`/api/stops?route=${encodeURIComponent(route)}&day=${day}`);
-        source = refreshed.stops;
-        setStops(source);
+      let source: Stop[] = (await api(`/api/stops?route=${encodeURIComponent(route)}&day=${day}`)).stops;
+      if (!skipGeocode && source.some((s) => s.lat == null || s.lon == null)) {
+        await geocode(false, route);
+        source = (await api(`/api/stops?route=${encodeURIComponent(route)}&day=${day}`)).stops;
       }
-      const remaining = source.filter((s): s is Stop & { lat: number; lon: number } => s.lat != null && s.lon != null);
+      const located = source.filter((s): s is Stop & { lat: number; lon: number } => s.lat != null && s.lon != null);
       const missing = source.filter((s) => s.lat == null || s.lon == null);
-      if (!remaining.length) { setMsg("A közelség szerinti rendezéshez előbb helyadat kell a címekhez."); return; }
-      const ordered: Stop[] = [];
-      let current = gps
-        ? remaining.reduce((best, s) => hav(gps, s) < hav(gps, best) ? s : best)
-        : remaining[0];
-      while (remaining.length) {
-        const index = remaining.findIndex((s) => s.id === current.id);
-        ordered.push(remaining.splice(index, 1)[0]);
-        if (!remaining.length) break;
-        const from = current;
-        current = remaining.reduce((best, s) => hav(from, s) < hav(from, best) ? s : best);
-      }
+      if (!located.length) { setMsg("A közelség szerinti rendezéshez előbb helyadat kell a címekhez."); return; }
+      const ordered = bestOrder(located, gps);
       const fullOrder = [...ordered, ...missing];
       await api("/api/stops", "PATCH", { order: fullOrder.map((s) => s.id) });
       await load(route);
       const refreshed = await api(`/api/stops?route=all&day=${day}`);
-      setMapStops(refreshed.stops);
+      setMapStops(visStops(refreshed.stops));
       setDv((o) => ({ ...o, ...refreshed.deliveries }));
       setMsg(`A ${ordered.length} helyadattal rendelkező cím közelség szerint sorba rendezve.${missing.length ? ` ${missing.length} koordináta nélküli cím a lista végére került.` : ""}`);
     } catch (e) {
       setMsg("A címek rendezése nem sikerült: " + (e instanceof Error ? e.message : String(e)));
     }
   }
+  // „Címek feltérképezése”: helyek megkeresése, majd közelség szerinti sorrend → ebből készül az útvonal
+  const [mapping, setMapping] = useState(false);
+  async function mapAndSort() {
+    if (mapping) return;
+    setMapping(true);
+    try { await geocode(false, route); await sortByProximity(true); } finally { setMapping(false); }
+  }
   const [scan, setScan] = useState(false);
-  async function saveScan(rows: { route_id: string; address: string; name: string; papers: string[] }[]) {
+  async function saveScan(rows: { route_id: string; address: string; name: string; papers: string[]; note?: string }[]) {
+    // a még nem létező túrák létrehozása (pl. Excelből érkező új túraszám)
+    const fresh = [...new Set(rows.map((r) => r.route_id))].filter((id) => id && !routes.some((x) => x.id === id));
+    for (const id of fresh) await api("/api/routes", "POST", { id, note: "" });
+    if (fresh.length) setRoutes(visRoutes(await api("/api/routes")));
     const have = new Set(stops.map((s) => s.address.toLowerCase()));
     for (const r of rows) {
+      if (!r.route_id) continue;
       if (r.route_id === route && have.has(r.address.toLowerCase())) continue;
-      await api("/api/stops", "POST", { ...r, note: "" });
+      await api("/api/stops", "POST", { note: "", ...r });
     }
-    setScan(false); setRoute(rows[0].route_id); await load(rows[0].route_id); geocode();
+    setScan(false); setRoute(rows[0].route_id); await load(rows[0].route_id); geocode(false, rows[0].route_id);
   }
   async function startNav(to: Stop) {
     if (!gps) { alert("Előbb kapcsold be a „Saját helyzet” gombot."); return; }
@@ -265,7 +333,7 @@ export default function Page() {
         const d = await api(`/api/stops?route=all&day=${day}`);
         const nz = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
         const k = nz(t);
-        setFound((d.stops as Stop[]).filter((s) => nz(`${s.address} ${s.name}`).includes(k)));
+        setFound(visStops(d.stops as Stop[]).filter((s) => nz(`${s.address} ${s.name}`).includes(k)));
         setDv((o) => ({ ...o, ...d.deliveries }));
       } catch {}
     }, 300);
@@ -377,7 +445,7 @@ export default function Page() {
           <button onClick={() => setOnly(!only)}>{only ? "Mind mutat" : "Csak hátralévők"}</button>
           <button onClick={summary}>Összesítő</button>
           <button className={showMap ? "on" : ""} onClick={() => setShowMap(!showMap)}>Térkép</button>
-          <button onClick={sortByProximity} disabled={!stops.length}>Közelség szerinti sorrend</button>
+          <button onClick={() => sortByProximity()} disabled={!stops.length}>Közelség szerinti sorrend</button>
           <button onClick={() => { setF({ ...f, r: route }); setDlg("stop"); }}>+ Cím</button>
           <button onClick={() => setDlg("route")}>+ Túra</button>
           <button onClick={() => setScan(true)}>📷 Beolvasás</button>
@@ -396,7 +464,7 @@ export default function Page() {
             }} />
             <div className="meta" style={{ marginTop: 6 }}>{pins.length} / {mapStops.length} cím helye látható a térképen{pins.length < mapStops.length ? ` · ${mapStops.length - pins.length} hely keresése folyamatban vagy sikertelen` : " · minden túra"}</div>
             {routeLineMsg && <div className="meta" style={{ marginTop: 6 }}>{routeLineMsg}</div>}
-            <div className="mt" style={{ margin: "8px 0" }}><button onClick={() => geocode()}>Címek feltérképezése</button><button onClick={() => confirm("Minden cím helyét újraszámolja, a kézzel javítottakat is. Folytatod?") && geocode(true)}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button></div>
+            <div className="mt" style={{ margin: "8px 0" }}><button disabled={mapping} onClick={mapAndSort}>{mapping ? "Feltérképezés…" : "Címek feltérképezése"}</button><button disabled={mapping} onClick={async () => { if (!confirm("A túra minden címének helyét újraszámolja, a kézzel javítottakat is. Folytatod?")) return; setMapping(true); try { await geocode(true, route); await sortByProximity(true); } finally { setMapping(false); } }}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button></div>
             {msg && <div className="meta">{msg}</div>}
             {nx && !nav && <div className="nxb">Legközelebbi: <b>{nx.s.address}</b>{nx.d != null && ` (${Math.round(nx.d)} m)`} · <button className="all" style={{ color: "#fff", borderColor: "#fff" }} onClick={() => startNav(nx.s)}>Navigálás</button></div>}
             {nav && (() => {

@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
+import { HIDDEN_ROUTES } from "@/lib/hidden";
 export const dynamic = "force-dynamic";
 
 const ST: Record<string, string> = { delivered: "Leadva", missing: "Hiányzik", cancelled: "Lemondva" };
@@ -16,7 +17,7 @@ export async function GET(req: Request) {
     from stops s
     join stop_papers p on p.stop_id = s.id
     left join deliveries d on d.stop_paper_id = p.id and d.day = ${day}::date
-    where (${route}::text = 'all' or s.route_id = ${route}::text)
+    where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[])
     order by s.route_id, s.position, p.ord`;
 
   const wb = new ExcelJS.Workbook();

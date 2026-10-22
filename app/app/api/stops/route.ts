@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { HIDDEN_ROUTES } from "@/lib/hidden";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
@@ -9,15 +10,16 @@ export async function GET(req: Request) {
     select s.id, s.route_id, s.position, s.address, s.name, s.note, s.lat, s.lon,
       coalesce(json_agg(json_build_object('id', p.id, 'paper', p.paper) order by p.ord) filter (where p.id is not null), '[]') as stop_papers
     from stops s left join stop_papers p on p.stop_id = s.id
-    where (${route}::text = 'all' or s.route_id = ${route}::text) group by s.id order by s.route_id, s.position`;
+    where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[]) group by s.id order by s.route_id, s.position`;
   const del = await sql`
     select d.stop_paper_id, d.status from deliveries d
     join stop_papers p on p.id = d.stop_paper_id join stops s on s.id = p.stop_id
-    where (${route}::text = 'all' or s.route_id = ${route}::text) and d.day = ${day}::date`;
+    where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[]) and d.day = ${day}::date`;
   return Response.json({ stops, deliveries: Object.fromEntries(del.map((x) => [x.stop_paper_id, x.status])) });
 }
 export async function POST(req: Request) {
   const { route_id, address, name, note, papers, lat, lon } = await req.json();
+  if (!route_id || !String(address ?? "").trim()) return Response.json({ error: "Hiányzó túra vagy cím." }, { status: 400 });
   const sql = db();
   const [{ id }] = await sql`
     insert into stops(route_id, position, address, name, note, lat, lon)

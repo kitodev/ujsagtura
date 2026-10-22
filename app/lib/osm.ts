@@ -102,36 +102,74 @@ const EP = ["https://overpass-api.de/api/interpreter", "https://overpass.private
 const AREA = `area["boundary"="administrative"]["admin_level"="8"]["name"="Kiskunhalas"]->.a;`;
 const BBOX = "(46.36,19.38,46.52,19.62)";
 
+// Az összes tükörszervert egyszerre kérdezzük, az első jó válasz nyer (nem várunk sorban egymás után).
 async function overpass(q: string, ms: number, until: number): Promise<El[]> {
-  let err = "";
-  for (const u of EP) {
-    if (Date.now() + 3000 > until) break;
+  const errs: string[] = [];
+  const one = async (u: string) => {
+    const host = new URL(u).host;
     try {
       const r = await fetch(u, {
         method: "POST", body: "data=" + encodeURIComponent(q),
         headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "ujsagtura/1.0 (hirlap-kezbesito alkalmazas)" },
-        signal: AbortSignal.timeout(Math.min(ms, until - Date.now())),
+        signal: AbortSignal.timeout(Math.max(3000, Math.min(ms, until - Date.now()))),
       });
-      if (!r.ok) { err = `${new URL(u).host}: ${r.status}`; continue; }
+      if (!r.ok) throw new Error(String(r.status));
       const j = (await r.json()) as { elements: El[]; remark?: string };
-      if (j.remark && /error|timed out|out of memory/i.test(j.remark)) { err = `${new URL(u).host}: ${j.remark}`; continue; }
+      if (j.remark && /error|timed out|out of memory/i.test(j.remark)) throw new Error(j.remark);
       return j.elements;
-    } catch (e) { err = `${new URL(u).host}: ${e instanceof Error ? e.message : e}`; }
+    } catch (e) { errs.push(`${host}: ${e instanceof Error ? e.message : e}`); throw e; }
+  };
+  for (let round = 0; round < 2 && Date.now() + 5000 < until; round++) {
+    try { return await Promise.any(EP.map(one)); } catch { /* minden szerver hibázott – még egy kör, ha van idő */ }
   }
-  throw new Error("Az OpenStreetMap szerver nem érhető el (" + err + "). Próbáld újra egy perc múlva.");
+  throw new Error("Az OpenStreetMap szerver nem érhető el (" + errs.slice(-3).join("; ") + "). Próbáld újra egy perc múlva.");
+}
+
+// --- Tartós tárolás az adatbázisban: ha egyszer sikerült letölteni, utána nem kell az Overpass ---
+async function dbc() {
+  const { db } = await import("@/lib/db");
+  const sql = db();
+  await sql`create table if not exists osm_cache (key text primary key, data jsonb not null, t timestamptz default now())`;
+  return sql;
+}
+async function saveCache(key: string, data: El[]) {
+  try { const sql = await dbc(); await sql`insert into osm_cache(key, data) values (${key}, ${JSON.stringify(data)}::jsonb) on conflict (key) do update set data = excluded.data, t = now()`; } catch { /* a tárolás hibája nem akadályozza a működést */ }
+}
+function addHouses(ix: Index, els: El[]) {
+  for (const e of els) {
+    const t = e.tags ?? {};
+    const pt = e.center ?? (e.lat != null && e.lon != null ? { lat: e.lat, lon: e.lon } : null);
+    const st = pt && t["addr:street"] ? ix.streets.get(norm(t["addr:street"])) : null;
+    if (st && pt) st.addr.push({ n: num(t["addr:housenumber"] ?? ""), raw: norm(t["addr:housenumber"] ?? ""), pt });
+  }
 }
 
 let cache: { t: number; ix: Index } | null = null;
+const FRESH = 30 * 24 * 3600 * 1000; // 30 napig nem töltjük újra (az utcák ritkán változnak)
 export async function getIndex(): Promise<Index> {
   if (cache && Date.now() - cache.t < 30 * 60 * 1000) return cache.ix;
-  // A bounded query is much lighter than resolving the city boundary relation,
-  // and still covers Kiskunhalas plus its outskirts. Leave enough time to try
-  // all three mirrors before the API route's 60 second execution limit.
-  const until = Date.now() + 48000;
-  const q = `[out:json][timeout:20]; (way["highway"]["name"]${BBOX}; nwr["place"]["name"]${BBOX};); out center tags;`;
-  const els = await overpass(q, 16000, until);
+  type Row = { data: El[]; t: string };
+  let stored: Row | null = null, houses: { key: string; data: El[] }[] = [];
+  try {
+    const sql = await dbc();
+    stored = ((await sql`select data, t from osm_cache where key = 'streets'`)[0] as unknown as Row | undefined) ?? null;
+    if (stored) houses = (await sql`select key, data from osm_cache where key like 'addr:%'`) as unknown as typeof houses;
+  } catch { /* nincs adatbázis-kapcsolat: marad az online lekérés */ }
+  let els: El[];
+  if (stored && Date.now() - new Date(stored.t).getTime() < FRESH) els = stored.data;
+  else {
+    const q = `[out:json][timeout:25]; (way["highway"]["name"]${BBOX}; nwr["place"]["name"]${BBOX};); out center tags;`;
+    try {
+      els = await overpass(q, 25000, Date.now() + 35000);
+      if (els.length) await saveCache("streets", els);
+    } catch (e) {
+      if (!stored) throw e;
+      els = stored.data; // régi mentett adat jobb, mint a semmi
+    }
+  }
   const ix = buildIndex(els);
   ix.bbox = true;
+  for (const h of houses) { addHouses(ix, h.data); ix.loaded.add(h.key.slice(5)); }
   if (ix.streets.size) cache = { t: Date.now(), ix };
   return ix;
 }
@@ -145,13 +183,13 @@ export async function loadAddresses(ix: Index, keys: string[], until: number): P
   const q = `[out:json][timeout:40]; ${area ? AREA : ""} nwr["addr:housenumber"]["addr:street"~"^(${re})$"]${area ? "(area.a)" : BBOX}; out center tags;`;
   try {
     const els = await overpass(q, 25000, until);
-    for (const e of els) {
-      const t = e.tags ?? {};
-      const pt = e.center ?? (e.lat != null && e.lon != null ? { lat: e.lat, lon: e.lon } : null);
-      const st = pt && t["addr:street"] ? ix.streets.get(norm(t["addr:street"])) : null;
-      if (st && pt) st.addr.push({ n: num(t["addr:housenumber"] ?? ""), raw: norm(t["addr:housenumber"] ?? ""), pt });
-    }
+    addHouses(ix, els);
     keys.forEach((k) => ix.loaded.add(k));
+    // utcánként elmentjük, hogy legközelebb ne kelljen letölteni
+    for (const k of keys) {
+      const nm = ix.streets.get(k)?.name;
+      await saveCache("addr:" + k, els.filter((e) => e.tags?.["addr:street"] === nm));
+    }
     return true;
   } catch { return false; }
 }

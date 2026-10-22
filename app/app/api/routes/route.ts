@@ -1,9 +1,10 @@
 import { db } from "@/lib/db";
+import { HIDDEN_ROUTES } from "@/lib/hidden";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const sql = db();
-  return Response.json(await sql`select * from routes order by id`);
+  return Response.json(await sql`select * from routes where id <> all(${HIDDEN_ROUTES}::text[]) order by id`);
 }
 export async function POST(req: Request) {
   const { id, note } = await req.json();
