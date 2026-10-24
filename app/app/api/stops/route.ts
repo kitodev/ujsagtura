@@ -1,13 +1,13 @@
 import { db } from "@/lib/db";
 import { HIDDEN_ROUTES } from "@/lib/hidden";
-import { splitPapers, splitCombinedPapers } from "@/lib/papers";
+import { splitPapers, ensurePapers } from "@/lib/papers";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const u = new URL(req.url);
   const route = u.searchParams.get("route"), day = u.searchParams.get("day");
   const sql = db();
-  await splitCombinedPapers(sql); // régi „PE + SPORT” jellegű tételek szétbontása (egyszer)
+  await ensurePapers(sql); // duplikátumok törlése + régi „PE + SPORT” tételek szétbontása (egyszer)
   const stops = await sql`
     select s.id, s.route_id, s.position, s.address, s.name, s.note, s.lat, s.lon,
       coalesce(json_agg(json_build_object('id', p.id, 'paper', p.paper) order by p.ord) filter (where p.id is not null), '[]') as stop_papers
@@ -24,11 +24,12 @@ export async function POST(req: Request) {
   const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
   if (!route_id || !String(address ?? "").trim()) return Response.json({ error: "Hiányzó túra vagy cím." }, { status: 400 });
   const sql = db();
+  await ensurePapers(sql);
   const [{ id }] = await sql`
     insert into stops(route_id, position, address, name, note, lat, lon)
     values (${route_id}, coalesce((select max(position) from stops where route_id = ${route_id}), 0) + 1, ${address}, ${name ?? ""}, ${note ?? ""}, ${lat ?? null}::float8, ${lon ?? null}::float8)
     returning id`;
-  await sql`insert into stop_papers(stop_id, paper) select ${id}::uuid, unnest(${papers}::text[])`;
+  await sql`insert into stop_papers(stop_id, paper) select ${id}::uuid, unnest(${papers}::text[]) on conflict do nothing`;
   return Response.json({ ok: true });
 }
 
@@ -62,16 +63,18 @@ export async function PUT(req: Request) {
   const { address, name, note, papers: raw, lat, lon } = await req.json();
   const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
   const sql = db();
+  await ensurePapers(sql);
   // cím változásakor a régi koordináta érvénytelen
   await sql`update stops set
       lat = case when ${lat ?? null}::float8 is not null then ${lat ?? null}::float8 when address = ${address} then lat else null end,
       lon = case when ${lon ?? null}::float8 is not null then ${lon ?? null}::float8 when address = ${address} then lon else null end,
       address = ${address}, name = ${name ?? ""}, note = ${note ?? ""}
     where id = ${id}::uuid`;
-  await sql`delete from stop_papers where stop_id = ${id}::uuid and paper <> all(${papers}::text[])`;
+  await sql`delete from stop_papers where stop_id = ${id}::uuid and lower(btrim(paper)) <> all(${papers.map((p: string) => p.toLowerCase())}::text[])`;
   await sql`insert into stop_papers(stop_id, paper)
     select ${id}::uuid, x from unnest(${papers}::text[]) as x
-    where x not in (select paper from stop_papers where stop_id = ${id}::uuid)`;
+    where lower(btrim(x)) not in (select lower(btrim(paper)) from stop_papers where stop_id = ${id}::uuid)
+    on conflict do nothing`;
   return Response.json({ ok: true });
 }
 

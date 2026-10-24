@@ -1,6 +1,6 @@
 import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
-import { splitPapers } from "@/lib/papers";
+import { splitPapers, ensurePapers } from "@/lib/papers";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -129,6 +129,7 @@ export async function POST(req: Request) {
   if (noRoute && !fallback) return bad(`${noRoute} sorhoz nincs túraszám: add meg a túra számát.`);
 
   const sql = db();
+  await ensurePapers(sql);
   let added = 0, skipped = 0;
   for (const rid of routes) {
     await sql`insert into routes(id, name, note) values (${rid}, ${rid + " túra"}, ${rid === fallback ? routeNote : ""}) on conflict (id) do nothing`;
@@ -148,7 +149,7 @@ export async function POST(req: Request) {
       const id = byPos.get(m + i + 1)!;
       for (const p of s.papers.length ? s.papers : ["Újság"]) { ids.push(id); papers.push(p); }
     });
-    await sql`insert into stop_papers(stop_id, paper) select unnest(${ids}::uuid[]), unnest(${papers}::text[])`;
+    await sql`insert into stop_papers(stop_id, paper) select unnest(${ids}::uuid[]), unnest(${papers}::text[]) on conflict do nothing`;
     added += list.length;
   }
   return Response.json({ ok: true, added, skipped, routes });
