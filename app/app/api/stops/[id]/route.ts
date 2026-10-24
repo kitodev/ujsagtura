@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { splitPapers } from "@/lib/papers";
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -10,7 +11,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { address, name, note, papers, lat, lon } = await req.json();
+  const { address, name, note, papers: raw, lat, lon } = await req.json();
+  const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
   const sql = db();
   // cím változásakor a régi koordináta érvénytelen
   await sql`update stops set

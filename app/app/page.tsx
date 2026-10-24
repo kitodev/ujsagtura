@@ -5,6 +5,7 @@ import type { Pin } from "@/components/Map";
 import Scan from "@/components/Scan";
 import StopForm, { type Meta } from "@/components/StopForm";
 import { HIDDEN_ROUTES } from "@/lib/hidden";
+import { splitPapers } from "@/lib/papers";
 
 const api = async (u: string, m = "GET", b?: unknown) => {
   const r = await fetch(u, { method: m, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined });
@@ -278,7 +279,7 @@ export default function Page() {
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
   async function saveStop() {
     if (!f.a.trim() || !f.r) return;
-    const ps = f.p.split(",").map((x) => x.trim()).filter(Boolean);
+    const ps = splitPapers(f.p);
     let { lat, lon } = f;
     if (lat == null) {
       setMsg("Cím ellenőrzése…");
@@ -300,8 +301,7 @@ export default function Page() {
   }
   async function saveEdit() {
     const a = f.a.trim(); if (!a) return;
-    const seen = new Set<string>();
-    const ps = f.p.split(",").map((x) => x.trim()).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
+    const ps = splitPapers(f.p);
     let { lat, lon } = f;
     if (lat == null && a !== editOrig) {
       const v = await verify(a);

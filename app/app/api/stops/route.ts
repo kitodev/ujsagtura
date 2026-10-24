@@ -1,11 +1,13 @@
 import { db } from "@/lib/db";
 import { HIDDEN_ROUTES } from "@/lib/hidden";
+import { splitPapers, splitCombinedPapers } from "@/lib/papers";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const u = new URL(req.url);
   const route = u.searchParams.get("route"), day = u.searchParams.get("day");
   const sql = db();
+  await splitCombinedPapers(sql); // régi „PE + SPORT” jellegű tételek szétbontása (egyszer)
   const stops = await sql`
     select s.id, s.route_id, s.position, s.address, s.name, s.note, s.lat, s.lon,
       coalesce(json_agg(json_build_object('id', p.id, 'paper', p.paper) order by p.ord) filter (where p.id is not null), '[]') as stop_papers
@@ -18,7 +20,8 @@ export async function GET(req: Request) {
   return Response.json({ stops, deliveries: Object.fromEntries(del.map((x) => [x.stop_paper_id, x.status])) });
 }
 export async function POST(req: Request) {
-  const { route_id, address, name, note, papers, lat, lon } = await req.json();
+  const { route_id, address, name, note, papers: raw, lat, lon } = await req.json();
+  const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
   if (!route_id || !String(address ?? "").trim()) return Response.json({ error: "Hiányzó túra vagy cím." }, { status: 400 });
   const sql = db();
   const [{ id }] = await sql`
@@ -56,7 +59,8 @@ export async function PATCH(req: Request) {
 
 export async function PUT(req: Request) {
   const id = idOf(req);
-  const { address, name, note, papers, lat, lon } = await req.json();
+  const { address, name, note, papers: raw, lat, lon } = await req.json();
+  const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
   const sql = db();
   // cím változásakor a régi koordináta érvénytelen
   await sql`update stops set

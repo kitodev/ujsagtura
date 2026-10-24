@@ -1,5 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
+import { splitPapers } from "@/lib/papers";
 
 const PAP = ["Vas. Nemzeti Sport", "Vasárnap Reggel", "Petőfi Népe", "Magyar Nemzet", "Nemzeti Sport", "10 SzerencseMix", "Vidék Íze", "Lakáskultúra", "Autó-Motor", "Autó Motor", "Szabad Föld", "SZAKMa", "Fanny", "Blikk", "HVG", "Hot!"];
 
@@ -86,7 +87,7 @@ export default function Scan({ routes, route, onSave, onClose }: {
     const rows = t.split("\n").flatMap((l) => {
       const [a, n, p, o] = l.split("|").map((x) => x.trim());
       if (!a) return [];
-      const ps = (p ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+      const ps = splitPapers(p);
       return [{ route_id: r, address: a, name: n ?? "", papers: ps.length ? ps : ["Újság"], note: o ?? "" }];
     });
     if (!r) { setSt("Válassz túrát, vagy vegyél fel egyet a „+ Túra” gombbal."); return; }

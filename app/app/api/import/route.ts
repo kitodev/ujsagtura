@@ -1,10 +1,11 @@
 import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
+import { splitPapers } from "@/lib/papers";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // Címek betöltése Excelből (.xlsx). Felismert oszlopok (a fejléc bármelyik sorban lehet az első 15-ből):
-//   Cím (kötelező) · Név · Újság (több is, vesszővel) · Megjegyzés · Túra · Sorszám
+//   Cím (kötelező) · Név · Újság (több is, vesszővel vagy „+” jellel) · Megjegyzés · Túra · Sorszám
 // Ha nincs Túra oszlop (vagy üres), a megadott túraszámhoz kerülnek a címek.
 // Ugyanaz a cím több sorban = egy cím több újsággal (pl. a letöltött Excel formátuma is betölthető).
 
@@ -69,7 +70,7 @@ function parse(wb: ExcelJS.Workbook): Row[] {
         address,
         name: get(row, "name"),
         note: get(row, "note"),
-        papers: get(row, "paper").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean),
+        papers: splitPapers(get(row, "paper")), // „PE + SPORT + VAS” → külön újságok
       });
     }
   });

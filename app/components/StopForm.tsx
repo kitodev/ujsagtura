@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { splitPapers } from "@/lib/papers";
 
 export type Meta = { papers: string[]; addresses: string[]; names: string[] };
 type F = { a: string; n: string; p: string; o: string; lat: number | null; lon: number | null };
@@ -11,7 +12,7 @@ export default function StopForm<T extends F>({ f, setF, meta }: { f: T; setF: (
   const [sug, setSug] = useState<Sug[]>([]);
   const [open, setOpen] = useState(false);
   const [np, setNp] = useState("");
-  const sel = f.p.split(",").map((x) => x.trim()).filter(Boolean);
+  const sel = splitPapers(f.p);
   const setP = (l: string[]) => setF({ ...f, p: l.join(", ") });
   const toggle = (p: string) => setP(sel.includes(p) ? sel.filter((x) => x !== p) : [...sel, p]);
   const addNew = () => {
