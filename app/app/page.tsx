@@ -19,7 +19,16 @@ type Route = { id: string; name: string; note: string };
 const NEXT: Record<string, string | null> = { "": "delivered", delivered: "missing", missing: "cancelled", cancelled: null };
 const LABEL: Record<string, string> = { delivered: "Leadva", missing: "Hiányzik", cancelled: "Lemondva" };
 type Step = { name: string; distance: number; maneuver: { type: string; modifier?: string; exit?: number; location: [number, number] } };
-type Nav = { to: Stop; steps: Step[]; coords: [number, number][]; dist: number; dur: number };
+// at: a vonal pontjainak távolsága az útvonal elejétől (m); stepAt: az egyes manőverek távolsága az elejétől (m)
+type Nav = { to: Stop; steps: Step[]; coords: [number, number][]; at: number[]; stepAt: number[]; dist: number; dur: number };
+const ICON: Record<string, string> = { left: "⬅", right: "➡", "slight left": "↖", "slight right": "↗", "sharp left": "↙", "sharp right": "↘", uturn: "↶", straight: "⬆" };
+function stepIcon(s: Step) {
+  const m = s.maneuver;
+  if (m.type === "arrive") return "⚑";
+  if (m.type === "roundabout" || m.type === "rotary") return "⟳";
+  return ICON[m.modifier ?? "straight"] ?? "⬆";
+}
+const fmtDist = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.max(0, Math.round(m / 10) * 10)} m`);
 const MOD: Record<string, string> = { left: "balra", right: "jobbra", "slight left": "enyhén balra", "slight right": "enyhén jobbra", "sharp left": "élesen balra", "sharp right": "élesen jobbra" };
 function stepText(s: Step) {
   const m = s.maneuver, n = s.name ? ` – ${s.name}` : "";
@@ -56,6 +65,42 @@ const hav = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) =
   const h = Math.sin(x / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(y / 2) ** 2;
   return 12742000 * Math.asin(Math.sqrt(h));
 };
+
+// Irányszög a-ból b-be (fok, 0 = észak, óramutató szerint)
+const bearingOf = (a: LL, b: LL) => {
+  const r = Math.PI / 180, y = Math.sin((b.lon - a.lon) * r) * Math.cos(b.lat * r);
+  const x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lon - a.lon) * r);
+  return ((Math.atan2(y, x) / r) + 360) % 360;
+};
+const angDiff = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
+// A helyzet ráillesztése az útvonalra: legközelebbi pont, távolság a vonaltól, megtett táv, és az adott szakasz iránya.
+// A keresést az előző találat környékén kezdjük, hogy egy önmagát keresztező útvonalnál ne ugorjon vissza.
+function snapRoute(nav: Nav, p: LL, from = 0) {
+  const c = nav.coords, kx = 111320 * Math.cos((p.lat * Math.PI) / 180), ky = 110540;
+  let best = { d: Infinity, i: 0, t: 0 };
+  const lo = Math.max(0, from - 5);
+  for (let i = lo; i < c.length - 1; i++) {
+    const ax = (c[i][1] - p.lon) * kx, ay = (c[i][0] - p.lat) * ky, bx = (c[i + 1][1] - p.lon) * kx, by = (c[i + 1][0] - p.lat) * ky;
+    const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
+    const t = L ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L)) : 0;
+    const d = Math.hypot(ax + t * dx, ay + t * dy);
+    if (d < best.d) best = { d, i, t };
+    if (i > lo + 60 && best.d < 15) break; // messzebb már nem kell keresni
+  }
+  const { i, t } = best;
+  const pt: [number, number] = c.length > 1 ? [c[i][0] + t * (c[i + 1][0] - c[i][0]), c[i][1] + t * (c[i + 1][1] - c[i][1])] : c[0];
+  const along = c.length > 1 ? nav.at[i] + t * (nav.at[i + 1] - nav.at[i]) : 0;
+  const seg = c.length > 1 ? bearingOf({ lat: c[i][0], lon: c[i][1] }, { lat: c[i + 1][0], lon: c[i + 1][1] }) : 0;
+  return { dist: best.d, i, pt, along, seg };
+}
+function makeNav(to: Stop, r: { legs: { steps: Step[] }[]; geometry: { coordinates: number[][] }; distance: number; duration: number }): Nav {
+  const coords = r.geometry.coordinates.map(([x, y]) => [y, x] as [number, number]);
+  const at = [0];
+  for (let i = 1; i < coords.length; i++) at.push(at[i - 1] + hav({ lat: coords[i - 1][0], lon: coords[i - 1][1] }, { lat: coords[i][0], lon: coords[i][1] }));
+  const steps = r.legs[0].steps, stepAt: number[] = [];
+  steps.forEach((s, k) => stepAt.push(k ? stepAt[k - 1] + steps[k - 1].distance : 0));
+  return { to, steps, coords, at, stepAt, dist: at[at.length - 1] || r.distance, dur: r.duration };
+}
 
 // Útvonal-sorrend: legközelebbi szomszéd módszer, majd 2-opt javítás (kiveszi a kereszteződő, visszafelé menő szakaszokat).
 // Ha van saját helyzet (GPS), onnan indul; ha nincs, azt a kezdőpontot választja, amelyikkel a legrövidebb az út.
@@ -119,6 +164,10 @@ export default function Page() {
   const [routeLineMsg, setRouteLineMsg] = useState("");
   const [idx, setIdx] = useState(0);
   const [voice, setVoice] = useState(false);
+  const [heading, setHeading] = useState<number | null>(null); // menetirány (GPS / mozgás / iránytű)
+  const [full, setFull] = useState(false);   // teljes képernyős térkép
+  const [drive, setDrive] = useState(false); // „úton haladó” (döntött, menetirány szerint forgó) nézet
+  const [rerouting, setRerouting] = useState(false);
 
   useEffect(() => {
     api("/api/routes").then((all: Route[]) => { const data = visRoutes(all); setRoutes(data); setRoute((r) => r || (data[0]?.id ?? "")); }).catch(() => setMsg("Nem érhető el az adatbázis"));
@@ -315,15 +364,32 @@ export default function Page() {
     }
     setScan(false); setRoute(rows[0].route_id); await load(rows[0].route_id); geocode(false, rows[0].route_id);
   }
-  async function startNav(to: Stop) {
-    if (!gps) { alert("Előbb kapcsold be a „Saját helyzet” gombot."); return; }
-    setMsg("Útvonal tervezése…");
+  const pendingNav = useRef<Stop | null>(null);
+  const lastReroute = useRef(0);
+  // reroute = true: letértünk az útvonalról, az aktuális helyzetből és menetirányból tervezünk újra (mint a Google Maps)
+  async function startNav(to: Stop, reroute = false) {
+    if (!gps) { pendingNav.current = to; watch(); setMsg("Helyzet meghatározása…"); return; }
+    if (to.lat == null || to.lon == null) { setMsg("Ennek a címnek nincs helye a térképen."); return; }
+    if (!reroute) setMsg("Útvonal tervezése…");
+    setRerouting(reroute);
+    lastReroute.current = Date.now();
+    const base = `https://router.project-osrm.org/route/v1/driving/${gps.lon},${gps.lat};${to.lon},${to.lat}?overview=full&geometries=geojson&steps=true`;
+    // a menetirány megadásával az OSRM olyan útvonalat ad, ami előre indul, és ha kell, a legközelebbi helyen fordít vissza
+    const h = heading;
+    const urls = h != null ? [`${base}&bearings=${Math.round(h)},60;&radiuses=40;unlimited`, base] : [base];
     try {
-      const j = await (await fetch(`https://router.project-osrm.org/route/v1/driving/${gps.lon},${gps.lat};${to.lon},${to.lat}?overview=full&geometries=geojson&steps=true`)).json();
-      const r = j.routes?.[0]; if (!r) throw new Error();
-      setNav({ to, steps: r.legs[0].steps, coords: r.geometry.coordinates.map(([x, y]: number[]) => [y, x]), dist: r.distance, dur: r.duration });
-      setIdx(0); setMsg("");
-    } catch { setMsg("Az útvonaltervezés nem sikerült (internet kell)."); }
+      let r = null;
+      for (const u of urls) {
+        try { const j = await (await fetch(u)).json(); r = j.routes?.[0]; if (r) break; } catch {}
+      }
+      if (!r) throw new Error();
+      const n = makeNav(to, r);
+      setNav(n);
+      setIdx(reroute && n.steps.length > 1 ? 1 : 0); setMsg("");
+      snapFrom.current = 0; offCount.current = 0;
+      if (!reroute) { setFull(true); setDrive(true); }
+    } catch { if (!reroute) setMsg("Az útvonaltervezés nem sikerült (internet kell)."); }
+    finally { setRerouting(false); }
   }
   useEffect(() => {
     const t = q.trim();
@@ -339,31 +405,94 @@ export default function Page() {
     }, 300);
     return () => clearTimeout(h);
   }, [q, tick, day]);
-  const best = useRef(Infinity);
-  useEffect(() => { best.current = Infinity; }, [idx, nav]);
+  // --- navigáció követése: ráillesztés az útvonalra, következő manőver, letérés esetén újratervezés ---
+  const snapFrom = useRef(0), offCount = useRef(0);
+  const snap = useMemo(() => (nav && gps ? snapRoute(nav, gps, snapFrom.current) : null), [nav, gps]);
+  const tol = Math.max(25, Math.min(gps?.acc ?? 0, 45)); // ennyi méteren belül „az úton vagyunk”
+  const onRoute = !!snap && snap.dist <= tol;
   useEffect(() => {
-    if (!nav || !gps || (gps.acc ?? 0) > 50) return;
-    const st = nav.steps[idx]; if (!st) return;
-    const at = (s: Step) => ({ lat: s.maneuver.location[1], lon: s.maneuver.location[0] });
-    const d = hav(gps, at(st));
-    // a küszöb a szakasz hosszához igazodik (12–30 m), de legalább a GPS pontatlanságához (max 25 m)
-    const len = idx > 0 ? nav.steps[idx - 1].distance : 100;
-    const R = Math.max(Math.min(30, Math.max(12, len * 0.3)), Math.min(gps.acc ?? 0, 25));
-    const nxt = nav.steps[idx + 1];
-    const passed = best.current < R * 2 && d > best.current + 10;   // közel volt, majd távolodik: elhagytuk
-    const skipped = !!nxt && hav(gps, at(nxt)) < Math.min(d, 40);   // a következő pont már közelebb van
-    best.current = Math.min(best.current, d);
-    if (d < R || passed || skipped) {
-      if (idx < nav.steps.length - 1) setIdx(idx + 1); else { setNav(null); setMsg("Megérkeztél."); }
+    if (!nav || !gps || !snap) return;
+    if (hav(gps, { lat: nav.to.lat!, lon: nav.to.lon! }) < 20 || (onRoute && nav.dist - snap.along < 15)) {
+      setNav(null); setDrive(false); setFull(false); setMsg(`Megérkeztél: ${nav.to.address}`);
+      if (voice && typeof speechSynthesis !== "undefined") { const u = new SpeechSynthesisUtterance("Megérkeztél"); u.lang = "hu-HU"; speechSynthesis.speak(u); }
+      return;
     }
-  }, [gps, nav, idx]);
+    if (onRoute) {
+      offCount.current = 0;
+      snapFrom.current = snap.i;
+      // a következő, még előttünk lévő manőver
+      let i = nav.stepAt.findIndex((a, k) => k >= 1 && a > snap.along + 4);
+      if (i < 0) i = nav.steps.length - 1;
+      if (i > idx && (idx > 0 || snap.along > 10)) setIdx(i);
+    } else if ((gps.acc ?? 0) <= 50) {
+      offCount.current++;
+      // 3 egymás utáni pont az útvonalon kívül, és legalább 8 mp telt el az előző tervezés óta → újratervezés
+      if (offCount.current >= 3 && !rerouting && Date.now() - lastReroute.current > 8000) {
+        offCount.current = 0;
+        if (voice && typeof speechSynthesis !== "undefined") { const u = new SpeechSynthesisUtterance("Újratervezés"); u.lang = "hu-HU"; speechSynthesis.cancel(); speechSynthesis.speak(u); }
+        startNav(nav.to, true);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap]);
+  useEffect(() => { if (gps && pendingNav.current) { const t = pendingNav.current; pendingNav.current = null; startNav(t); } // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gps]);
+  // képernyő ébren tartása navigáció közben
+  useEffect(() => {
+    if (!nav) return;
+    let lock: { release: () => Promise<void> } | null = null;
+    (navigator as Navigator & { wakeLock?: { request: (t: string) => Promise<{ release: () => Promise<void> }> } }).wakeLock?.request("screen").then((l) => { lock = l; }).catch(() => {});
+    return () => { lock?.release().catch(() => {}); };
+  }, [!!nav]); // eslint-disable-line react-hooks/exhaustive-deps
+  // teljes képernyő: a böngésző saját teljes képernyős módja is (ahol támogatott), és a háttér görgetésének tiltása
+  useEffect(() => {
+    document.body.style.overflow = full ? "hidden" : "";
+    if (full) document.documentElement.requestFullscreen?.().catch(() => {});
+    else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    const onFs = () => { if (!document.fullscreenElement) setFull(false); };
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, [full]);
   useEffect(() => {
     if (!nav || !voice || !nav.steps[idx] || typeof speechSynthesis === "undefined") return;
     const u = new SpeechSynthesisUtterance(stepText(nav.steps[idx])); u.lang = "hu-HU";
     speechSynthesis.cancel(); speechSynthesis.speak(u);
   }, [idx, nav, voice]);
+  // --- helymeghatározás és menetirány ---
+  const watchId = useRef<number | null>(null);
+  const prevFix = useRef<LL | null>(null), lastMove = useRef(0), lastCompass = useRef(0);
   function watch() {
-    navigator.geolocation?.watchPosition((p) => setGps({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }), () => alert("A helymeghatározás nincs engedélyezve"), { enableHighAccuracy: true });
+    if (watchId.current != null || !navigator.geolocation) return;
+    watchId.current = navigator.geolocation.watchPosition((p) => {
+      const c = p.coords, cur = { lat: c.latitude, lon: c.longitude };
+      let h: number | null = null;
+      // 1) a GPS saját iránya, ha haladunk  2) különben az elmozdulás iránya (legalább 5 m után)
+      if (c.heading != null && !isNaN(c.heading) && (c.speed ?? 0) >= 1) h = c.heading;
+      const pf = prevFix.current, moved = pf ? hav(pf, cur) : 0;
+      if (h == null && pf && moved >= 5 && c.accuracy <= 30) h = bearingOf(pf, cur);
+      if (!pf || moved >= 5) prevFix.current = cur;
+      if (h != null) { lastMove.current = Date.now(); setHeading(h); }
+      setGps({ lat: cur.lat, lon: cur.lon, acc: c.accuracy });
+    }, () => { watchId.current = null; alert("A helymeghatározás nincs engedélyezve"); }, { enableHighAccuracy: true, maximumAge: 1000 });
+    // 3) álló helyzetben az iránytű (ha a telefon támogatja); iPhone-on engedélyt kell kérni
+    const onOri = (e: DeviceOrientationEvent & { webkitCompassHeading?: number }) => {
+      const now = Date.now();
+      if (now - lastMove.current < 4000 || now - lastCompass.current < 250) return;
+      let h: number | null = null;
+      if (e.webkitCompassHeading != null) h = e.webkitCompassHeading;
+      else if (e.absolute && e.alpha != null) h = 360 - e.alpha;
+      if (h == null) return;
+      lastCompass.current = now;
+      h = (h + (screen.orientation?.angle ?? 0) + 360) % 360;
+      setHeading((o) => (o == null || angDiff(o, h!) > 4 ? h : o));
+    };
+    const DOE = (window as unknown as { DeviceOrientationEvent?: { requestPermission?: () => Promise<string> } }).DeviceOrientationEvent;
+    const add = () => {
+      window.addEventListener("deviceorientationabsolute", onOri as EventListener, true);
+      window.addEventListener("deviceorientation", onOri as EventListener, true);
+    };
+    if (DOE?.requestPermission) DOE.requestPermission().then((r) => { if (r === "granted") add(); }).catch(() => {});
+    else add();
   }
 
   const here = gps ?? (last?.lat != null ? { lat: last.lat, lon: last.lon! } : null);
@@ -402,6 +531,9 @@ export default function Page() {
       .catch((e) => { if (e.name !== "AbortError") setRouteLineMsg((m) => `${m}${m ? " · " : ""}Az úthálózati útvonal nem érhető el; egyenes szakaszok láthatók.`); });
     return () => controller.abort();
   }, [showMap, route, stops, nav]);
+  // a megjelenített helyzet és irány: navigáció közben az útra illesztve (mint a Google Maps-nél)
+  const shownHeading = onRoute && snap && (heading == null || angDiff(heading, snap.seg) < 50) ? snap.seg : heading;
+  const shownMe = nav && onRoute && snap && gps ? { lat: snap.pt[0], lon: snap.pt[1], acc: gps.acc } : gps;
   const all = stops.flatMap((s) => s.stop_papers);
   const done = all.filter((p) => dv[p.id]).length;
 
@@ -456,32 +588,54 @@ export default function Page() {
         <input className="srch" placeholder="🔎 Keresés: utca, házszám vagy név (minden túrában)" value={q} onChange={(e) => setQ(e.target.value)} />
         {showMap && (
           <>
-            <MapView pins={pins} me={gps} line={nav?.coords ?? routeLine} follow={!!nav} onPick={(id) => {
-              const selected = mapStops.find((s) => s.id === id);
-              if (!selected) return;
-              if (selected.route_id && selected.route_id !== route) setRoute(selected.route_id);
-              window.setTimeout(() => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
-            }} />
+            <div className={`mapwrap${full ? " full" : ""}`}>
+              <MapView pins={pins} me={shownMe} heading={shownHeading} line={nav?.coords ?? routeLine} cut={nav && onRoute && snap ? { i: snap.i, pt: snap.pt } : null}
+                follow={!!nav} drive={drive} full={full} onPick={(id) => {
+                const selected = mapStops.find((s) => s.id === id);
+                if (!selected) return;
+                if (selected.route_id && selected.route_id !== route) setRoute(selected.route_id);
+                if (full) { setFull(false); setDrive(false); }
+                window.setTimeout(() => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
+              }} />
+              <div className="mapctl">
+                <button title={full ? "Kicsinyítés" : "Teljes képernyő"} onClick={() => setFull(!full)}>{full ? "✕" : "⛶"}</button>
+                <button title="Vezetés nézet (menetirány szerint, döntve)" className={drive ? "on" : ""} onClick={() => { if (!drive) watch(); setDrive(!drive); }}>{drive ? "2D" : "3D"}</button>
+                {!gps && <button title="Saját helyzet" onClick={watch}>⌖</button>}
+              </div>
+              {nav && (() => {
+                const st = nav.steps[idx], [lo, la] = st.maneuver.location;
+                const tgt = idx === 0 && nav.steps.length > 1 ? 1 : idx;
+                const d = gps ? (onRoute && snap ? nav.stepAt[tgt] - snap.along : hav(gps, { lat: la, lon: lo })) : null;
+                const rem = onRoute && snap ? Math.max(0, nav.dist - snap.along) : nav.dist;
+                const remT = nav.dist ? (nav.dur * rem) / nav.dist : nav.dur;
+                const eta = new Date(Date.now() + remT * 1000).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" });
+                const nxt = nav.steps[idx + 1];
+                return (<>
+                  <div className="navtop">
+                    <div className="navic">{stepIcon(st)}</div>
+                    <div style={{ minWidth: 0 }}>
+                      {d != null && <div className="navd">{fmtDist(d)}</div>}
+                      <div className="navt">{rerouting ? "Újratervezés…" : stepText(st)}</div>
+                      {nxt && idx > 0 && <div className="navn">Utána: {stepIcon(nxt)} {stepText(nxt)}</div>}
+                    </div>
+                  </div>
+                  <div className="navbot">
+                    <div><b>{Math.max(1, Math.round(remT / 60))} perc</b> · {fmtDist(rem)} · érkezés {eta}</div>
+                    <div className="nm" style={{ color: "inherit", opacity: .8 }}>Cél: {nav.to.address}{!onRoute && gps ? " · letértél az útvonalról" : ""}</div>
+                    <div className="mt" style={{ marginTop: 6 }}>
+                      <button onClick={() => startNav(nav.to, true)}>Újratervezés</button>
+                      <button className={voice ? "on" : ""} onClick={() => setVoice(!voice)}>🔊 Hang</button>
+                      <button onClick={() => { setNav(null); setDrive(false); setFull(false); }}>Leállítás</button>
+                    </div>
+                  </div>
+                </>);
+              })()}
+            </div>
             <div className="meta" style={{ marginTop: 6 }}>{pins.length} / {mapStops.length} cím helye látható a térképen{pins.length < mapStops.length ? ` · ${mapStops.length - pins.length} hely keresése folyamatban vagy sikertelen` : " · minden túra"}</div>
             {routeLineMsg && <div className="meta" style={{ marginTop: 6 }}>{routeLineMsg}</div>}
             <div className="mt" style={{ margin: "8px 0" }}><button disabled={mapping} onClick={mapAndSort}>{mapping ? "Feltérképezés…" : "Címek feltérképezése"}</button><button disabled={mapping} onClick={async () => { if (!confirm("A túra minden címének helyét újraszámolja, a kézzel javítottakat is. Folytatod?")) return; setMapping(true); try { await geocode(true, route); await sortByProximity(true); } finally { setMapping(false); } }}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button></div>
             {msg && <div className="meta">{msg}</div>}
             {nx && !nav && <div className="nxb">Legközelebbi: <b>{nx.s.address}</b>{nx.d != null && ` (${Math.round(nx.d)} m)`} · <button className="all" style={{ color: "#fff", borderColor: "#fff" }} onClick={() => startNav(nx.s)}>Navigálás</button></div>}
-            {nav && (() => {
-              const st = nav.steps[idx], [lo, la] = st.maneuver.location;
-              const d = gps ? Math.round(hav(gps, { lat: la, lon: lo })) : null;
-              return (
-                <div className="nxb">
-                  <div style={{ fontSize: 18 }}><b>{stepText(st)}</b>{d != null && ` · ${d} m`}</div>
-                  <div>Cél: {nav.to.address} · {(nav.dist / 1000).toFixed(1)} km · {Math.round(nav.dur / 60)} perc</div>
-                  <div className="mt" style={{ marginTop: 6 }}>
-                    <button onClick={() => startNav(nav.to)}>Újratervezés</button>
-                    <button className={voice ? "on" : ""} onClick={() => setVoice(!voice)}>Hang</button>
-                    <button onClick={() => setNav(null)}>Leállítás</button>
-                  </div>
-                </div>
-              );
-            })()}
           </>
         )}
         {sum && <pre>{sum}<br /><button onClick={() => navigator.clipboard.writeText(sum)}>Másolás</button> <button onClick={() => setSum("")}>Bezár</button></pre>}

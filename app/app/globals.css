@@ -20,7 +20,24 @@ button,input{font:inherit}
 .chip.cancelled{background:var(--ca);border-color:var(--ca);color:#fff;text-decoration:line-through}
 .all{border:1px solid var(--ok);color:var(--ok);background:transparent;border-radius:8px;padding:6px 9px;font-size:13px;white-space:nowrap;height:fit-content}
 .nxb{background:var(--ac);color:#fff;border-radius:10px;padding:8px 10px;margin:8px 0;font-size:14px}.nxb a{color:#fff;font-weight:700}
-.leaflet-container{height:38vh;min-height:220px;border-radius:12px}
+.mapwrap{position:relative}
+.mapbox{position:relative;height:38vh;min-height:220px;border-radius:12px;overflow:hidden}
+.mapwrap.full{position:fixed;inset:0;z-index:1500;background:#000}
+.mapwrap.full .mapbox{position:absolute;inset:0;height:auto;border-radius:0}
+.mapctl{position:absolute;right:8px;top:8px;display:flex;flex-direction:column;gap:6px;z-index:3}
+.mapctl button{width:44px;height:44px;border-radius:50%;border:0;background:#fff;color:#1d1d1b;font-weight:700;font-size:16px;box-shadow:0 1px 4px #0005}
+.mapctl button.on{background:#1a73e8;color:#fff}
+.recenter{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:3;border:0;border-radius:22px;padding:10px 18px;background:#fff;color:#1a73e8;font-weight:700;box-shadow:0 1px 6px #0006}
+.me-arrow{width:40px;height:40px;filter:drop-shadow(0 1px 2px #0006)}
+.navtop{display:flex;gap:12px;align-items:center;background:#0b8043;color:#fff;border-radius:12px;padding:10px 12px;margin:8px 0}
+.navic{font-size:34px;line-height:1;min-width:40px;text-align:center}
+.navd{font-size:24px;font-weight:800}.navt{font-size:17px;font-weight:600}.navn{font-size:13px;opacity:.85;margin-top:2px}
+.navbot{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.mapwrap.full .mapctl{top:auto;bottom:calc(150px + env(safe-area-inset-bottom))}
+.mapwrap.full .navtop{position:absolute;z-index:3;left:8px;right:64px;top:calc(8px + env(safe-area-inset-top));margin:0;box-shadow:0 2px 8px #0006}
+.mapwrap.full:not(:has(.navtop)) .mapctl{top:calc(8px + env(safe-area-inset-top));bottom:auto}
+.mapwrap.full .navbot{position:absolute;z-index:3;left:0;right:0;bottom:0;margin:0;border-radius:16px 16px 0 0;padding-bottom:calc(10px + env(safe-area-inset-bottom));box-shadow:0 -2px 8px #0004}
+.mapwrap.full .recenter{bottom:calc(150px + env(safe-area-inset-bottom))}
 .pin{background:#666;color:#fff;border-radius:50%;width:26px;height:26px;line-height:22px;text-align:center;font-weight:700;font-size:12px;border:2px solid #fff}
 .pin.d{background:var(--ok)}.pin.h{background:#8a6d00}.pin.n{background:var(--mi)}
 pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;font-size:14px}
