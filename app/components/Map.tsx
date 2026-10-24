@@ -87,9 +87,13 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
       keep.add(p.id);
       let x = have.get(p.id);
       if (!x) {
+        // A külső elemet a MapLibre pozicionálja (saját osztályt kap) – a látható szám egy belső elembe kerül,
+        // különben az osztály felülírása elrontja a pozicionálást, és a jelölők egymás alá csúsznak.
+        const box = document.createElement("div");
         const el = document.createElement("div");
-        el.addEventListener("click", (e) => { e.stopPropagation(); pickRef.current(p.id); });
-        x = { el, m: new maplibregl.Marker({ element: el }).setLngLat([p.lon, p.lat]).addTo(map) };
+        box.appendChild(el);
+        box.addEventListener("click", (e) => { e.stopPropagation(); pickRef.current(p.id); });
+        x = { el, m: new maplibregl.Marker({ element: box }).setLngLat([p.lon, p.lat]).addTo(map) };
         have.set(p.id, x);
       }
       x.el.className = `pin ${p.cls}`;
