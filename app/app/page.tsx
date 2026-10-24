@@ -477,14 +477,14 @@ export default function Page() {
     // 3) álló helyzetben az iránytű (ha a telefon támogatja); iPhone-on engedélyt kell kérni
     const onOri = (e: DeviceOrientationEvent & { webkitCompassHeading?: number }) => {
       const now = Date.now();
-      if (now - lastMove.current < 4000 || now - lastCompass.current < 250) return;
+      if (now - lastMove.current < 4000 || now - lastCompass.current < 400) return;
       let h: number | null = null;
       if (e.webkitCompassHeading != null) h = e.webkitCompassHeading;
       else if (e.absolute && e.alpha != null) h = 360 - e.alpha;
       if (h == null) return;
       lastCompass.current = now;
       h = (h + (screen.orientation?.angle ?? 0) + 360) % 360;
-      setHeading((o) => (o == null || angDiff(o, h!) > 4 ? h : o));
+      setHeading((o) => (o == null || angDiff(o, h!) > 5 ? h : o));
     };
     const DOE = (window as unknown as { DeviceOrientationEvent?: { requestPermission?: () => Promise<string> } }).DeviceOrientationEvent;
     const add = () => {
@@ -588,7 +588,7 @@ export default function Page() {
         <input className="srch" placeholder="🔎 Keresés: utca, házszám vagy név (minden túrában)" value={q} onChange={(e) => setQ(e.target.value)} />
         {showMap && (
           <>
-            <div className={`mapwrap${full ? " full" : ""}`}>
+            <div className={`mapwrap${full ? " full" : ""}${nav ? "" : " nonav"}`}>
               <MapView pins={pins} me={shownMe} heading={shownHeading} line={nav?.coords ?? routeLine} cut={nav && onRoute && snap ? { i: snap.i, pt: snap.pt } : null}
                 follow={!!nav} drive={drive} full={full} onPick={(id) => {
                 const selected = mapStops.find((s) => s.id === id);
@@ -645,7 +645,7 @@ export default function Page() {
             <div className="meta" style={{ margin: "6px 0" }}>{found.length} találat (minden túrában)</div>
             {found.map((s) => renderCard(s, -1, s.route_id))}
           </>
-        ) : stops.map((s, i) => renderCard(s, i))}
+        ) : full ? null : stops.map((s, i) => renderCard(s, i))}
       </main>
       {dlg && (
         <div className="ov" onClick={() => setDlg("")}>

@@ -35,7 +35,7 @@ button,input{font:inherit}
 .navbot{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-bottom:8px}
 .mapwrap.full .mapctl{top:auto;bottom:calc(150px + env(safe-area-inset-bottom))}
 .mapwrap.full .navtop{position:absolute;z-index:3;left:8px;right:64px;top:calc(8px + env(safe-area-inset-top));margin:0;box-shadow:0 2px 8px #0006}
-.mapwrap.full:not(:has(.navtop)) .mapctl{top:calc(8px + env(safe-area-inset-top));bottom:auto}
+.mapwrap.full.nonav .mapctl{top:calc(8px + env(safe-area-inset-top));bottom:auto}
 .mapwrap.full .navbot{position:absolute;z-index:3;left:0;right:0;bottom:0;margin:0;border-radius:16px 16px 0 0;padding-bottom:calc(10px + env(safe-area-inset-bottom));box-shadow:0 -2px 8px #0004}
 .mapwrap.full .recenter{bottom:calc(150px + env(safe-area-inset-bottom))}
 .pin{background:#666;color:#fff;border-radius:50%;width:26px;height:26px;line-height:22px;text-align:center;font-weight:700;font-size:12px;border:2px solid #fff}

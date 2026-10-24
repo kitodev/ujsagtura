@@ -35,6 +35,24 @@ function circle(c: LL, r: number): GeoJSON.FeatureCollection {
   }
   return { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [pts] } }] };
 }
+// Címjelölők képe (szám egy színes körben). A jelölőket a térkép grafikus rétegként (WebGL) rajzolja, nem
+// külön HTML-elemként: több száz HTML-jelölőt a térkép minden mozgáskor egyenként áthelyezett, ez teljes
+// képernyőn és 3D nézetben lefagyasztotta a telefont.
+const PIN_COLOR: Record<string, string> = { "": "#666666", d: "#2e7d32", h: "#8a6d00", n: "#e08a00" };
+function pinImage(id: string) {
+  const [, cls, n] = id.split("|");
+  const r = 2, S = 28 * r, c = document.createElement("canvas");
+  c.width = c.height = S;
+  const g = c.getContext("2d")!;
+  g.beginPath(); g.arc(S / 2, S / 2, S / 2 - r, 0, 2 * Math.PI);
+  g.fillStyle = PIN_COLOR[cls] ?? PIN_COLOR[""]; g.fill();
+  g.lineWidth = 2 * r; g.strokeStyle = "#fff"; g.stroke();
+  g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = `bold ${(n.length > 2 ? 10 : 12) * r}px system-ui, sans-serif`;
+  g.fillText(n, S / 2, S / 2 + r / 2);
+  return { width: S, height: S, data: new Uint8Array(g.getImageData(0, 0, S, S).data.buffer) };
+}
+
 const ARROW = `<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="17" fill="#fff" opacity=".9"/><path d="M20 5 L31 32 L20 26 L9 32 Z" fill="#1a73e8" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
 const DOT = `<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="10" fill="#1a73e8" stroke="#fff" stroke-width="3.5"/></svg>`;
 
@@ -47,7 +65,6 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
   const meEl = useRef<HTMLDivElement | null>(null);
   const shown = useRef<LL | null>(null);          // a nyíl éppen kirajzolt helye (animációhoz)
   const anim = useRef(0);
-  const pinMarkers = useRef(new globalThis.Map<string, { m: maplibregl.Marker; el: HTMLDivElement }>());
   const pickRef = useRef(onPick); pickRef.current = onPick;
   const zoomRef = useRef<number | null>(null);    // a felhasználó által követés közben beállított nagyítás
   const track = (follow || drive) && !free;
@@ -55,7 +72,9 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
   // --- létrehozás ---
   useEffect(() => {
     if (!box.current) return;
-    const map = new maplibregl.Map({ container: box.current, style: STYLE, center: [19.485, 46.434], zoom: 14, maxPitch: 70, attributionControl: { compact: true } });
+    const map = new maplibregl.Map({ container: box.current, style: STYLE, center: [19.485, 46.434], zoom: 14, maxPitch: 60, attributionControl: { compact: true },
+      // telefonon a 3-szoros felbontás sokszor annyi rajzolást jelent, a 2-szeres is éles
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 2), fadeDuration: 0 });
     mapRef.current = map;
     map.on("load", () => {
       map.addSource("route", { type: "geojson", data: EMPTY });
@@ -63,10 +82,18 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
       map.addLayer({ id: "acc", type: "fill", source: "acc", paint: { "fill-color": "#1a73e8", "fill-opacity": 0.12 } });
       map.addLayer({ id: "route-casing", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#0b57d0", "line-width": ["interpolate", ["linear"], ["zoom"], 12, 5, 18, 14] } });
       map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#4b8ff7", "line-width": ["interpolate", ["linear"], ["zoom"], 12, 3, 18, 10] } });
+      map.addSource("pins", { type: "geojson", data: EMPTY });
+      map.addLayer({ id: "pins", type: "symbol", source: "pins", layout: {
+        "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true,
+        "symbol-sort-key": ["get", "n"], "icon-pitch-alignment": "viewport" } });
       setReady(true);
     });
     const userMove = (e: { originalEvent?: unknown }) => { if (e.originalEvent) setFree(true); };
     map.on("dragstart", userMove);
+    map.on("styleimagemissing", (e) => { if (e.id.startsWith("pin|") && !map.hasImage(e.id)) map.addImage(e.id, pinImage(e.id), { pixelRatio: 2 }); });
+    map.on("click", "pins", (e) => { const id = e.features?.[0]?.properties?.id; if (id) pickRef.current(String(id)); });
+    map.on("mouseenter", "pins", () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "pins", () => { map.getCanvas().style.cursor = ""; });
     map.on("zoomend", (e) => { if ((e as { originalEvent?: unknown }).originalEvent) zoomRef.current = map.getZoom(); });
     const el = document.createElement("div");
     el.className = "me-arrow";
@@ -75,34 +102,19 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
     meMarker.current = new maplibregl.Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" });
     const ro = new ResizeObserver(() => map.resize());
     ro.observe(box.current);
-    const markers = pinMarkers.current;
-    return () => { ro.disconnect(); cancelAnimationFrame(anim.current); markers.clear(); map.remove(); mapRef.current = null; setReady(false); };
+    return () => { ro.disconnect(); cancelAnimationFrame(anim.current); map.remove(); mapRef.current = null; setReady(false); };
   }, []);
 
-  // --- címek jelölői ---
+  // --- címek jelölői (csak akkor frissül, ha tényleg változott valami) ---
+  const pinData = pins.map((p) => `${p.id}|${p.cls}|${p.n}|${p.lat},${p.lon}`).join(";");
   useEffect(() => {
-    const map = mapRef.current; if (!map) return;
-    const have = pinMarkers.current, keep = new Set<string>();
-    for (const p of pins) {
-      keep.add(p.id);
-      let x = have.get(p.id);
-      if (!x) {
-        // A külső elemet a MapLibre pozicionálja (saját osztályt kap) – a látható szám egy belső elembe kerül,
-        // különben az osztály felülírása elrontja a pozicionálást, és a jelölők egymás alá csúsznak.
-        const box = document.createElement("div");
-        const el = document.createElement("div");
-        box.appendChild(el);
-        box.addEventListener("click", (e) => { e.stopPropagation(); pickRef.current(p.id); });
-        x = { el, m: new maplibregl.Marker({ element: box }).setLngLat([p.lon, p.lat]).addTo(map) };
-        have.set(p.id, x);
-      }
-      x.el.className = `pin ${p.cls}`;
-      x.el.textContent = String(p.n);
-      x.el.title = p.label;
-      x.m.setLngLat([p.lon, p.lat]);
-    }
-    for (const [id, x] of have) if (!keep.has(id)) { x.m.remove(); have.delete(id); }
-  }, [pins]);
+    const src = ready ? (mapRef.current?.getSource("pins") as maplibregl.GeoJSONSource | undefined) : undefined;
+    if (!src) return;
+    src.setData({ type: "FeatureCollection", features: pins.map((p) => ({
+      type: "Feature", properties: { id: p.id, n: p.n, icon: `pin|${p.cls}|${p.n}` },
+      geometry: { type: "Point", coordinates: [p.lon, p.lat] } })) });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, pinData]);
 
   // --- igazítás a címekre / útvonalra (csak ha nem követjük a helyzetet) ---
   const fit = (pts: [number, number][]) => {
@@ -126,15 +138,21 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
   }, [ready, line, cut]);
 
   // --- saját helyzet: nyíl + pontossági kör, sima mozgatás ---
+  // Csak számokra figyelünk (nem az objektumra), így a felesleges újrarajzolások elmaradnak.
+  const lat = me?.lat ?? null, lon = me?.lon ?? null, acc = me?.acc ?? 0;
   useEffect(() => {
-    const map = mapRef.current, mk = meMarker.current, el = meEl.current;
-    if (!map || !mk || !el) return;
-    if (!me) { mk.remove(); shown.current = null; return; }
+    const el = meEl.current, mk = meMarker.current;
+    if (!el || !mk) return;
     const kind = heading == null ? "dot" : "arrow";
     if (el.dataset.kind !== kind) { el.dataset.kind = kind; el.innerHTML = kind === "dot" ? DOT : ARROW; }
     if (heading != null) mk.setRotation(heading);
-    if (!shown.current) { shown.current = me; mk.setLngLat([me.lon, me.lat]).addTo(map); }
-    const from = shown.current, to = me, t0 = performance.now(), D = 900;
+  }, [heading]);
+  useEffect(() => {
+    const map = mapRef.current, mk = meMarker.current;
+    if (!map || !mk) return;
+    if (lat == null || lon == null) { mk.remove(); shown.current = null; return; }
+    if (!shown.current) { shown.current = { lat, lon }; mk.setLngLat([lon, lat]).addTo(map); }
+    const from = shown.current, to = { lat, lon }, t0 = performance.now(), D = 900;
     cancelAnimationFrame(anim.current);
     const step = (t: number) => {
       const k = Math.min(1, (t - t0) / D);
@@ -143,25 +161,35 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
       if (k < 1) anim.current = requestAnimationFrame(step);
     };
     anim.current = requestAnimationFrame(step);
-    const acc = ready ? (map.getSource("acc") as maplibregl.GeoJSONSource | undefined) : undefined;
-    acc?.setData(me.acc && me.acc > 8 && !drive ? circle(me, me.acc) : EMPTY);
-  }, [me, heading, ready, drive]);
+  }, [lat, lon]);
+  useEffect(() => {
+    const src = ready ? (mapRef.current?.getSource("acc") as maplibregl.GeoJSONSource | undefined) : undefined;
+    src?.setData(lat != null && lon != null && acc > 8 && !drive ? circle({ lat, lon }, acc) : EMPTY);
+  }, [lat, lon, acc, ready, drive]);
 
   // --- kamera követés ---
+  // Csak akkor mozdítjuk a kamerát, ha legalább 1 métert mentünk vagy 3 fokot fordultunk:
+  // az iránytű apró rezgései ne indítsanak folyamatos újrarajzolást.
+  const lastCam = useRef<{ lat: number; lon: number; h: number | null; mode: string } | null>(null);
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !track || !me) return;
+    if (!map || !track || lat == null || lon == null) { lastCam.current = null; return; }
+    const mode = `${drive}|${zoomRef.current}`, L = lastCam.current;
+    const moved = L ? Math.hypot((lat - L.lat) * 110540, (lon - L.lon) * 111320 * Math.cos((lat * Math.PI) / 180)) : Infinity;
+    const turned = L && heading != null && L.h != null ? Math.abs(((heading - L.h + 540) % 360) - 180) : Infinity;
+    if (L && L.mode === mode && moved < 1 && (!drive || turned < 3)) return;
+    lastCam.current = { lat, lon, h: heading, mode };
     const h = map.getContainer().clientHeight;
-    const z = zoomRef.current ?? (drive ? 17.6 : 16.5);
+    const z = zoomRef.current ?? (drive ? 17.5 : 16.5);
     map.easeTo({
-      center: [me.lon, me.lat],
+      center: [lon, lat],
       zoom: z,
       bearing: drive ? (heading ?? map.getBearing()) : 0,
-      pitch: drive ? 58 : 0,
+      pitch: drive ? 50 : 0,
       padding: drive ? { top: Math.round(h * 0.45), bottom: 0, left: 0, right: 0 } : { top: 0, bottom: 0, left: 0, right: 0 },
       duration: 900, easing: (t) => t, essential: true,
     });
-  }, [me, heading, track, drive]);
+  }, [lat, lon, heading, track, drive]);
 
   // nézetváltáskor alapértelmezett nagyítás; vezetés nézetből kilépve vissza északra és laposra
   useEffect(() => {
