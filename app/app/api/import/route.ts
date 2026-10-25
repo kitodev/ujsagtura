@@ -1,6 +1,9 @@
 import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
 import { splitPapers, ensurePapers } from "@/lib/papers";
+import { addrKey } from "@/lib/addr";
+import { HIDDEN_ROUTES } from "@/lib/hidden";
+import { addPapers } from "@/lib/dupe";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -83,7 +86,7 @@ function group(rows: Row[], fallback: string): Stop[] {
   const by = new Map<string, Stop>();
   for (const r of rows) {
     const route = r.route || fallback;
-    const k = route + "\u0000" + nz(r.address);
+    const k = addrKey(r.address); // egy cím csak egyszer (az első túrában marad, ahol szerepel)
     const s = by.get(k) ?? { route, address: r.address, name: "", note: "", papers: [], pos: r.pos, seq: r.seq };
     if (!s.name && r.name) s.name = r.name;
     if (r.note && !s.note.split(" · ").includes(r.note)) s.note = s.note ? `${s.note} · ${r.note}` : r.note;
@@ -130,12 +133,17 @@ export async function POST(req: Request) {
 
   const sql = db();
   await ensurePapers(sql);
-  let added = 0, skipped = 0;
+  let added = 0, skipped = 0, merged = 0;
+  // a már felvett címek (minden túrából): ezekhez legfeljebb új újság kerül, új cím nem
+  const existing = new Map(((await sql`select id, address from stops where route_id <> all(${HIDDEN_ROUTES}::text[])`) as { id: string; address: string }[]).map((x) => [addrKey(x.address), x.id]));
   for (const rid of routes) {
     await sql`insert into routes(id, name, note) values (${rid}, ${rid + " túra"}, ${rid === fallback ? routeNote : ""}) on conflict (id) do nothing`;
-    const have = new Set((await sql`select address from stops where route_id = ${rid}`).map((x) => nz(x.address as string)));
-    const list = stops.filter((s) => s.route === rid && !have.has(nz(s.address)));
-    skipped += stops.filter((s) => s.route === rid).length - list.length;
+    const mine = stops.filter((s) => s.route === rid);
+    const list = mine.filter((s) => !existing.has(addrKey(s.address)));
+    for (const s of mine.filter((s) => existing.has(addrKey(s.address)))) {
+      const fresh = await addPapers(sql, existing.get(addrKey(s.address))!, s.papers);
+      if (fresh.length) merged++; else skipped++;
+    }
     if (!list.length) continue;
     const [{ m }] = await sql`select coalesce(max(position), 0)::int as m from stops where route_id = ${rid}`;
     const ins = await sql`
@@ -152,7 +160,7 @@ export async function POST(req: Request) {
     await sql`insert into stop_papers(stop_id, paper) select unnest(${ids}::uuid[]), unnest(${papers}::text[]) on conflict do nothing`;
     added += list.length;
   }
-  return Response.json({ ok: true, added, skipped, routes });
+  return Response.json({ ok: true, added, skipped, merged, routes });
 }
 
 // Minta Excel letöltése

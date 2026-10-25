@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { splitPapers, ensurePapers } from "@/lib/papers";
+import { findAddress } from "@/lib/dupe";
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -15,6 +16,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
   const sql = db();
   await ensurePapers(sql);
+  const clash = await findAddress(sql, address, id);
+  if (clash) return Response.json({ error: `Ez a cím már szerepel (${clash.route_id}. túra: ${clash.address}). Egy cím csak egyszer szerepelhet.`, match: clash }, { status: 409 });
   // cím változásakor a régi koordináta érvénytelen
   await sql`update stops set
       lat = case when ${lat ?? null}::float8 is not null then ${lat ?? null}::float8 when address = ${address} then lat else null end,

@@ -329,17 +329,40 @@ export default function Page() {
     if (!f.a.trim() || !f.r) return;
     const ps = splitPapers(f.p);
     let { lat, lon } = f;
-    if (lat == null) {
+    if (lat == null && !dupe) {
       setMsg("Cím ellenőrzése…");
       const v = await verify(f.a);
       setMsg("");
       if (!v && !confirm("Ez a cím nem található Kiskunhalason (vagy nincs internet). Csak kiskunhalasi cím vehető fel. Mentsem pontos hely nélkül?")) return;
       if (v) { lat = v.lat; lon = v.lon; }
     }
-    await api("/api/stops", "POST", { route_id: f.r, address: f.a.trim(), name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon });
-    setDlg(""); setF({ ...f, a: "", n: "", p: "", o: "", lat: null, lon: null });
-    if (f.r === route) load(route); else setRoute(f.r);
+    const r = await fetch("/api/stops", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ route_id: f.r, address: f.a.trim(), name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon, merge: !!dupe }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 409) { setDupe(j.match); return; } // közben derült ki, hogy már megvan: figyelmeztetés a párbeszédben
+    if (!r.ok) { alert(j.error ?? "A mentés nem sikerült."); return; }
+    setDlg(""); setF({ ...f, a: "", n: "", p: "", o: "", lat: null, lon: null }); setDupe(null);
+    const target = j.merged ? j.match.route_id : f.r;
+    if (j.merged) setMsg(j.added?.length ? `${j.match.address}: hozzáadva ${j.added.join(", ")}` : `${j.match.address}: ezek az újságok már rajta voltak.`);
+    if (target === route) load(route); else setRoute(target);
   }
+  // Dupla cím figyelése: a beírt cím szerepel-e már (bármelyik túrában)
+  type Match = { id: string; route_id: string; address: string; name: string; papers: string[] };
+  const [dupe, setDupe] = useState<Match | null>(null);
+  useEffect(() => {
+    setDupe(null);
+    if (dlg !== "stop" && dlg !== "edit") return;
+    const a = f.a.trim();
+    if (a.length < 4) return;
+    const t = setTimeout(async () => {
+      try {
+        const j = await api(`/api/check-address?address=${encodeURIComponent(a)}${dlg === "edit" ? `&except=${editId}` : ""}`);
+        setDupe(j.match);
+      } catch {}
+    }, 400);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.a, dlg]);
   const [xd, setXd] = useState(""), [xt, setXt] = useState(""), [xr, setXr] = useState("all"); // Excel: ettől–eddig, túra
   const [editId, setEditId] = useState(""), [editOrig, setEditOrig] = useState("");
   function openEdit(s: Stop) {
@@ -356,7 +379,11 @@ export default function Page() {
       if (!v && !confirm("Ez a cím nem található Kiskunhalason (vagy nincs internet). Csak kiskunhalasi cím vehető fel. Mentsem pontos hely nélkül?")) return;
       if (v) { lat = v.lat; lon = v.lon; }
     }
-    await api(`/api/stops?id=${editId}`, "PUT", { address: a, name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon });
+    if (dupe) return; // ütköző cím: a párbeszéd már jelzi
+    const r = await fetch(`/api/stops?id=${editId}`, { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: a, name: f.n.trim(), note: f.o.trim(), papers: ps.length ? ps : ["Újság"], lat, lon }) });
+    if (r.status === 409) { setDupe((await r.json()).match); return; }
+    if (!r.ok) { alert("A mentés nem sikerült."); return; }
     setDlg(""); load(route);
   }
   async function delStop() {
@@ -404,12 +431,14 @@ export default function Page() {
     const fresh = [...new Set(rows.map((r) => r.route_id))].filter((id) => id && !routes.some((x) => x.id === id));
     for (const id of fresh) await api("/api/routes", "POST", { id, note: "" });
     if (fresh.length) setRoutes(visRoutes(await api("/api/routes")));
-    const have = new Set(stops.map((s) => s.address.toLowerCase()));
+    // a már meglévő címeknél nem lesz új cím, csak az új újságok kerülnek hozzá (a szerver dönti el)
+    let merged = 0;
     for (const r of rows) {
       if (!r.route_id) continue;
-      if (r.route_id === route && have.has(r.address.toLowerCase())) continue;
-      await api("/api/stops", "POST", { note: "", ...r });
+      const j = await api("/api/stops", "POST", { note: "", ...r, merge: true });
+      if (j.merged) merged++;
     }
+    if (merged) setMsg(`${merged} cím már szerepelt – ezeknél csak az új újságok kerültek hozzá.`);
     setScan(false); setRoute(rows[0].route_id); await load(rows[0].route_id); geocode(false, rows[0].route_id);
   }
   const pendingNav = useRef<Stop | null>(null);
@@ -818,12 +847,29 @@ export default function Page() {
             </>) : dlg === "edit" ? (<>
               <b>Cím szerkesztése</b>
               <StopForm f={f} setF={setF} meta={meta} />
-              <div className="row"><button onClick={delStop} style={{ color: "var(--ca)" }}>Cím törlése</button><button onClick={() => setDlg("")}>Mégse</button><button className="p" onClick={saveEdit}>Mentés</button></div>
+              {dupe && <div className="dupe bad">⛔ Ez a cím már szerepel: <b>{dupe.address}</b> ({dupe.route_id}. túra{dupe.name ? ` · ${dupe.name}` : ""}). Egy cím csak egyszer szerepelhet – az újságokat annál a címnél add hozzá.</div>}
+              <div className="row"><button onClick={delStop} style={{ color: "var(--ca)" }}>Cím törlése</button><button onClick={() => setDlg("")}>Mégse</button><button className="p" onClick={saveEdit} disabled={!!dupe}>Mentés</button></div>
             </>) : dlg === "stop" ? (<>
               <b>Új cím felvétele</b>
               <select value={f.r} onChange={set("r")}>{routes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
               <StopForm f={f} setF={setF} meta={meta} />
-              <div className="row"><button onClick={() => setDlg("")}>Mégse</button><button className="p" onClick={saveStop}>Mentés</button></div>
+              {dupe && (() => {
+                const have = new Set(dupe.papers.map((p) => p.toLowerCase()));
+                const fresh = splitPapers(f.p).filter((p) => !have.has(p.toLowerCase()));
+                return (
+                  <div className="dupe">
+                    ⚠ <b>Erre a címre már viszel ki újságot!</b><br />
+                    {dupe.address} – {dupe.route_id}. túra{dupe.name ? ` · ${dupe.name}` : ""}<br />
+                    Jelenleg: {dupe.papers.join(", ") || "–"}<br />
+                    {fresh.length ? <>Új cím nem jön létre, csak ezek kerülnek hozzá: <b>{fresh.join(", ")}</b></> : <>A kiválasztott újságok már mind rajta vannak ezen a címen – jelölj ki újat.</>}
+                  </div>
+                );
+              })()}
+              <div className="row"><button onClick={() => setDlg("")}>Mégse</button>
+                {dupe
+                  ? <button className="p" onClick={saveStop} disabled={!splitPapers(f.p).some((p) => !dupe.papers.some((x) => x.toLowerCase() === p.toLowerCase()))}>➕ Hozzáadás a meglévő címhez</button>
+                  : <button className="p" onClick={saveStop}>Mentés</button>}
+              </div>
             </>) : (<>
               <b>Új túra felvétele</b>
               <input placeholder="Túra száma (pl. 255)" value={f.id} onChange={set("id")} />

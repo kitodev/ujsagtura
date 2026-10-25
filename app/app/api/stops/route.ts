@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { HIDDEN_ROUTES } from "@/lib/hidden";
 import { splitPapers, ensurePapers } from "@/lib/papers";
+import { findAddress, addPapers } from "@/lib/dupe";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
@@ -20,11 +21,20 @@ export async function GET(req: Request) {
   return Response.json({ stops, deliveries: Object.fromEntries(del.map((x) => [x.stop_paper_id, x.status])) });
 }
 export async function POST(req: Request) {
-  const { route_id, address, name, note, papers: raw, lat, lon } = await req.json();
+  const { route_id, address, name, note, papers: raw, lat, lon, merge } = await req.json();
   const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
   if (!route_id || !String(address ?? "").trim()) return Response.json({ error: "Hiányzó túra vagy cím." }, { status: 400 });
   const sql = db();
   await ensurePapers(sql);
+  // Egy cím csak egyszer szerepelhet: ha már megvan, az új újságok csak hozzáadhatók (merge: true)
+  const match = await findAddress(sql, address);
+  if (match) {
+    if (!merge) return Response.json({ error: "Erre a címre már viszel ki újságot.", match }, { status: 409 });
+    const added = await addPapers(sql, match.id, papers);
+    if (note && String(note).trim()) await sql`update stops set note = case when note = '' then ${note} when position(${note} in note) > 0 then note else note || ' · ' || ${note} end where id = ${match.id}::uuid`;
+    if (name && String(name).trim()) await sql`update stops set name = ${name} where id = ${match.id}::uuid and name = ''`;
+    return Response.json({ ok: true, merged: true, match, added });
+  }
   const [{ id }] = await sql`
     insert into stops(route_id, position, address, name, note, lat, lon)
     values (${route_id}, coalesce((select max(position) from stops where route_id = ${route_id}), 0) + 1, ${address}, ${name ?? ""}, ${note ?? ""}, ${lat ?? null}::float8, ${lon ?? null}::float8)
@@ -64,6 +74,8 @@ export async function PUT(req: Request) {
   const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
   const sql = db();
   await ensurePapers(sql);
+  const clash = await findAddress(sql, address, id);
+  if (clash) return Response.json({ error: `Ez a cím már szerepel (${clash.route_id}. túra: ${clash.address}). Egy cím csak egyszer szerepelhet.`, match: clash }, { status: 409 });
   // cím változásakor a régi koordináta érvénytelen
   await sql`update stops set
       lat = case when ${lat ?? null}::float8 is not null then ${lat ?? null}::float8 when address = ${address} then lat else null end,

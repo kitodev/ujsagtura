@@ -89,5 +89,8 @@ pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;
 .pi-chip.cancelled{background:#c62828;border-color:#c62828;color:#fff;text-decoration:line-through}
 .pi-go{margin-top:8px;width:100%;border:0;border-radius:8px;background:#1f4e79;color:#fff;padding:7px;font:inherit;font-size:13px;font-weight:600}
 .pi-hint{font-size:11px;color:#6b675e;text-align:center;margin-top:3px}
+.dupe{background:#fff3cd;color:#5c4400;border:2px solid #e0a800;border-radius:10px;padding:9px 11px;font-size:14px;line-height:1.45}
+.dupe.bad{background:#fde8e8;color:#7a1414;border-color:var(--ca)}
+.row button:disabled{opacity:.45}
 .srch{width:100%;padding:11px 12px;margin-bottom:10px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--tx)}
 .flt button b{display:block;font-size:14px}
