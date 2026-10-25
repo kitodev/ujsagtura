@@ -65,5 +65,7 @@ pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;
 .selhd button{border:0;background:none;color:inherit;font-size:16px;padding:0 4px}
 @media(prefers-color-scheme:dark){.selhd{color:#8fc0ff}}
 @keyframes selpulse{0%{box-shadow:0 0 0 0 #1a73e8aa}100%{box-shadow:0 0 0 14px #1a73e800}}
+.totop{position:fixed;right:14px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:1400;width:50px;height:50px;border-radius:50%;border:0;background:var(--ac);color:#fff;font-size:24px;font-weight:700;box-shadow:0 2px 8px #0006}
+.xlr{display:flex;align-items:center;gap:8px}.xlr span{width:48px;font-size:14px;color:var(--mu)}.xlr input{flex:1}
 .srch{width:100%;padding:11px 12px;margin-bottom:10px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--tx)}
 .flt button b{display:block;font-size:14px}

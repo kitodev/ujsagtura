@@ -175,7 +175,14 @@ export default function Page() {
   const [routeLineMsg, setRouteLineMsg] = useState("");
   const [restOnly, setRestOnly] = useState(false);
   const [picked, setPicked] = useState("");          // a térképen rábökött cím (kiemelve a listában)
-  const pickScrolled = useRef(false);           // csak a hátralévő címek útvonala
+  const pickScrolled = useRef(false);
+  // „fel” gomb: csak akkor látszik, ha már lejjebb görgettünk
+  const [showTop, setShowTop] = useState(false);
+  useEffect(() => {
+    const on = () => setShowTop(window.scrollY > 300);
+    on(); window.addEventListener("scroll", on, { passive: true });
+    return () => window.removeEventListener("scroll", on);
+  }, []);           // csak a hátralévő címek útvonala
   const [restOrder, setRestOrder] = useState<string[]>([]);  // a hátralévő címek újraszámolt sorrendje
   const [idx, setIdx] = useState(0);
   const [voice, setVoice] = useState(false);
@@ -213,6 +220,8 @@ export default function Page() {
   }, [showMap, day]);
 
   const handled = (s: Stop) => s.stop_papers.every((p) => dv[p.id]);
+  // van még leadandó újsága (jelöletlen vagy „Hiányzik”)
+  const pending = (s: Stop) => s.stop_papers.some((p) => !dv[p.id] || dv[p.id] === "missing");
 
   async function cycle(s: Stop, p: Paper) {
     const n = NEXT[dv[p.id] ?? ""];
@@ -313,7 +322,7 @@ export default function Page() {
     setDlg(""); setF({ ...f, a: "", n: "", p: "", o: "", lat: null, lon: null });
     if (f.r === route) load(route); else setRoute(f.r);
   }
-  const [xd, setXd] = useState(""), [xr, setXr] = useState("all");
+  const [xd, setXd] = useState(""), [xt, setXt] = useState(""), [xr, setXr] = useState("all"); // Excel: ettől–eddig, túra
   const [editId, setEditId] = useState(""), [editOrig, setEditOrig] = useState("");
   function openEdit(s: Stop) {
     setEditId(s.id); setEditOrig(s.address);
@@ -529,7 +538,9 @@ export default function Page() {
   }, [stops, dv, here]);
 
   const restN = new Map(restOrder.map((id, i) => [id, i + 1]));
-  const pins: Pin[] = mapStops.flatMap((s) => s.lat == null || s.lon == null ? [] : [{
+  // „Hátralévő útvonal” módban (vagy a „Hátralévő” szűrőnél) a már elintézett címek nem látszanak a térképen
+  const hideDone = restOnly || flt === "todo";
+  const pins: Pin[] = mapStops.flatMap((s) => s.lat == null || s.lon == null || (hideDone && !pending(s) && s.id !== picked) ? [] : [{
     id: s.id, n: restN.get(s.id) ?? s.position,
     // hátralévő módban a már kész címek pipát kapnak, hogy ne keveredjenek az új sorszámokkal
     t: restOnly && s.route_id === route && !restN.has(s.id) ? "✓" : undefined, lat: s.lat, lon: s.lon, label: `${s.address} · ${s.route_id} túra`,
@@ -539,7 +550,6 @@ export default function Page() {
   }]);
   // „Hátralévő útvonal” mód: csak azok a címek, ahol van még le nem adott újság (jelöletlen vagy „Hiányzik”),
   // a sorrendet a jelenlegi helyzetből újraszámolja; a leadott / lemondott címek kimaradnak az útvonalból.
-  const pending = (s: Stop) => s.stop_papers.some((p) => !dv[p.id] || dv[p.id] === "missing");
   const restKey = restOnly ? stops.filter(pending).map((s) => s.id).join(",") : "";
   const gpsRef = useRef(gps); gpsRef.current = gps;
   useEffect(() => {
@@ -648,7 +658,7 @@ export default function Page() {
           <button onClick={() => { setF({ ...f, r: route }); setDlg("stop"); }}>+ Cím</button>
           <button onClick={() => setDlg("route")}>+ Túra</button>
           <button onClick={() => setScan(true)}>📷 Beolvasás</button>
-          <button onClick={() => { setXd(day); setXr("all"); setDlg("xl"); }}>📊 Excel</button>
+          <button onClick={() => { setXd(day); setXt(day); setXr("all"); setDlg("xl"); }}>📊 Excel</button>
         </div>
       </header>
       <main>
@@ -707,7 +717,8 @@ export default function Page() {
                 </>);
               })()}
             </div>
-            <div className="meta" style={{ marginTop: 6 }}>{pins.length} / {mapStops.length} cím helye látható a térképen{pins.length < mapStops.length ? ` · ${mapStops.length - pins.length} hely keresése folyamatban vagy sikertelen` : " · minden túra"}</div>
+            {(() => { const loc = mapStops.filter((s) => s.lat != null && s.lon != null).length; return (
+              <div className="meta" style={{ marginTop: 6 }}>{loc} / {mapStops.length} cím helye ismert{loc < mapStops.length ? ` · ${mapStops.length - loc} hely keresése folyamatban vagy sikertelen` : " · minden túra"}{hideDone ? ` · a már elintézett címek el vannak rejtve (${pins.length} látható)` : ""}</div>); })()}
             {routeLineMsg && <div className="meta" style={{ marginTop: 6 }}>{routeLineMsg}</div>}
             <div className="mt" style={{ margin: "8px 0" }}><button disabled={mapping} onClick={mapAndSort}>{mapping ? "Feltérképezés…" : "Címek feltérképezése"}</button><button disabled={mapping} onClick={async () => { if (!confirm("A túra minden címének helyét újraszámolja, a kézzel javítottakat is. Folytatod?")) return; setMapping(true); try { await geocode(true, route); await sortByProximity(true); } finally { setMapping(false); } }}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button><button className={restOnly ? "on" : ""} onClick={() => setRestOnly(!restOnly)}>{restOnly ? "Teljes útvonal" : "Hátralévő útvonal"}</button></div>
             {msg && <div className="meta">{msg}</div>}
@@ -728,15 +739,24 @@ export default function Page() {
           <div className="dlg" onClick={(e) => e.stopPropagation()}>
             {dlg === "xl" ? (<>
               <b>Excel letöltése</b>
-              <input type="date" value={xd} onChange={(e) => setXd(e.target.value)} />
+              <label className="xlr"><span>Ettől</span><input type="date" value={xd} max={today} onChange={(e) => { setXd(e.target.value); if (e.target.value > xt) setXt(e.target.value); }} /></label>
+              <label className="xlr"><span>Eddig</span><input type="date" value={xt} max={today} onChange={(e) => { setXt(e.target.value); if (e.target.value < xd) setXd(e.target.value); }} /></label>
+              {(() => {
+                const back = (n: number) => { const d = new Date(today + "T12:00:00"); d.setDate(d.getDate() - n); return d.toLocaleDateString("sv-SE"); };
+                return <div className="mt">
+                  <button className={xd === day && xt === day ? "on" : ""} onClick={() => { setXd(day); setXt(day); }}>Kiválasztott nap</button>
+                  <button onClick={() => { setXd(back(6)); setXt(today); }}>Utolsó 7 nap</button>
+                  <button onClick={() => { setXd(today.slice(0, 8) + "01"); setXt(today); }}>Ez a hónap</button>
+                </div>;
+              })()}
               <select value={xr} onChange={(e) => setXr(e.target.value)}>
                 <option value="all">Minden túra</option>
                 {routes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select>
-              <small>Lapok: Összesítő (újságonként), Kiküldött, Hiányzik, Lemondva, Nem kezelt.</small>
+              <small>Lapok: Összesítő (újságonként){xd !== xt ? ", Napok (napi bontás)" : ""}, Kiküldött, Hiányzik, Lemondva, Nem kezelt – minden sorban a dátummal. Legfeljebb 93 nap.</small>
               <div className="row">
                 <button onClick={() => setDlg("")}>Bezár</button>
-                <a href={`/api/export?day=${xd}&route=${encodeURIComponent(xr)}`} style={{ flex: 1, padding: 10, borderRadius: 8, textAlign: "center", textDecoration: "none", background: "var(--ac)", color: "#fff" }}>⬇ Letöltés</a>
+                {(Date.parse(xt) - Date.parse(xd)) / 864e5 + 1 > 93 ? <span style={{ flex: 1, padding: 10, textAlign: "center", color: "var(--ca)" }}>Legfeljebb 93 nap</span> : <a href={`/api/export?from=${xd}&to=${xt}&route=${encodeURIComponent(xr)}`} style={{ flex: 1, padding: 10, borderRadius: 8, textAlign: "center", textDecoration: "none", background: "var(--ac)", color: "#fff" }}>⬇ Letöltés</a>}
               </div>
             </>) : dlg === "edit" ? (<>
               <b>Cím szerkesztése</b>
@@ -756,6 +776,7 @@ export default function Page() {
           </div>
         </div>
       )}
+      {showTop && !full && <button className="totop" aria-label="Az oldal tetejére" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>↑</button>}
       {scan && <Scan routes={routes} route={route} onSave={saveScan} onClose={() => setScan(false)} />}
     </>
   );
