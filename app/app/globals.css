@@ -33,11 +33,11 @@ button,input{font:inherit}
 .navic{font-size:34px;line-height:1;min-width:40px;text-align:center}
 .navd{font-size:24px;font-weight:800}.navt{font-size:17px;font-weight:600}.navn{font-size:13px;opacity:.85;margin-top:2px}
 .navbot{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-bottom:8px}
-.mapwrap.full .mapctl{top:auto;bottom:calc(150px + env(safe-area-inset-bottom))}
+.mapwrap.full .mapctl{top:auto;bottom:calc(215px + env(safe-area-inset-bottom))}
 .mapwrap.full .navtop{position:absolute;z-index:3;left:8px;right:64px;top:calc(8px + env(safe-area-inset-top));margin:0;box-shadow:0 2px 8px #0006}
 .mapwrap.full.nonav .mapctl{top:calc(8px + env(safe-area-inset-top));bottom:auto}
 .mapwrap.full .navbot{position:absolute;z-index:3;left:0;right:0;bottom:0;margin:0;border-radius:16px 16px 0 0;padding-bottom:calc(10px + env(safe-area-inset-bottom));box-shadow:0 -2px 8px #0004}
-.mapwrap.full .recenter{bottom:calc(150px + env(safe-area-inset-bottom))}
+.mapwrap.full .recenter{bottom:calc(215px + env(safe-area-inset-bottom))}
 .pin{background:#666;color:#fff;border-radius:50%;width:26px;height:26px;line-height:22px;text-align:center;font-weight:700;font-size:12px;border:2px solid #fff}
 .pin.d{background:var(--ok)}.pin.h{background:#8a6d00}.pin.n{background:var(--mi)}
 pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;font-size:14px}
@@ -72,5 +72,22 @@ pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;
 @keyframes fring{0%{transform:scale(.6);opacity:1}100%{transform:scale(1.5);opacity:.15}}
 .focus-pop .maplibregl-popup-content{background:#1a73e8;color:#fff;font-weight:700;font-size:15px;padding:7px 11px;border-radius:10px;box-shadow:0 2px 8px #0006}
 .focus-pop.maplibregl-popup-anchor-bottom .maplibregl-popup-tip{border-top-color:#1a73e8}
+.navdest{font-size:16px;margin-top:2px}
+.navpap{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+.navpap span{font-size:13px;color:var(--mu);font-weight:600}
+.navpap .chip{padding:7px 11px;font-size:15px;font-weight:700}
+.navpap .chip.todo{border-color:var(--ac);color:var(--ac);background:transparent}
+.navpap .chip.todo.missing{background:var(--mi);border-color:var(--mi);color:#fff}
+.navpap .chip:not(.todo){opacity:.55}
+.pin-pop .maplibregl-popup-content{border-radius:12px;padding:10px 26px 10px 12px;box-shadow:0 3px 12px #0005;color:#1d1d1b}
+.pin-pop .maplibregl-popup-close-button{font-size:20px;width:26px;height:26px}
+.pin-info b{font-size:15px;display:block}
+.pi-sub{font-size:12px;color:#6b675e;margin-top:1px}.pi-note{font-size:12px;color:#b36b00;margin-top:3px}
+.pi-pap{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}
+.pi-chip{font-size:13px;font-weight:700;padding:3px 9px;border-radius:12px;border:2px solid #1f4e79;color:#1f4e79}
+.pi-chip.delivered{background:#2e7d32;border-color:#2e7d32;color:#fff}.pi-chip.missing{background:#e08a00;border-color:#e08a00;color:#fff}
+.pi-chip.cancelled{background:#c62828;border-color:#c62828;color:#fff;text-decoration:line-through}
+.pi-go{margin-top:8px;width:100%;border:0;border-radius:8px;background:#1f4e79;color:#fff;padding:7px;font:inherit;font-size:13px;font-weight:600}
+.pi-hint{font-size:11px;color:#6b675e;text-align:center;margin-top:3px}
 .srch{width:100%;padding:11px 12px;margin-bottom:10px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--tx)}
 .flt button b{display:block;font-size:14px}

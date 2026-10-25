@@ -174,12 +174,15 @@ export default function Page() {
   const [routeLine, setRouteLine] = useState<[number, number][] | null>(null);
   const [routeLineMsg, setRouteLineMsg] = useState("");
   const [restOnly, setRestOnly] = useState(false);
-  const [picked, setPicked] = useState("");          // a térképen rábökött cím (kiemelve a listában)
+  const [picked, setPicked] = useState("");
+  const [pickNote, setPickNote] = useState("");
+  const [infoId, setInfoId] = useState("");
+  const [pickTick, setPickTick] = useState(0);   // ugyanarra a címre újra rábökve is görgessen      // a térképen egyszer rábökött cím (kis ablak) // a kiemelt kártya fejléce (honnan jött a kiválasztás)          // a térképen rábökött cím (kiemelve a listában)
   const pickScrolled = useRef(false);
   // a listában rábökött cím megmutatása a térképen
   const [focus, setFocus] = useState<{ lat: number; lon: number; label: string; k: number } | null>(null);
   function showOnMap(s: Stop) {
-    setPicked(s.id); pickScrolled.current = true; // a kártya is kiemelve marad, de nem görgetünk le hozzá
+    setPicked(s.id); setPickNote("🗺️ A térképen mutatott cím"); pickScrolled.current = true; // a kártya is kiemelve marad, de nem görgetünk le hozzá
     if (s.lat == null || s.lon == null) { setFocus(null); setMsg(`„${s.address}” helye még nincs meg a térképen (Címek feltérképezése).`); }
     else setFocus({ lat: s.lat, lon: s.lon, label: `${s.address}${s.name ? " – " + s.name : ""}`, k: Date.now() });
     setShowMap(true);
@@ -455,9 +458,29 @@ export default function Page() {
   const snap = useMemo(() => (nav && gps ? snapRoute(nav, gps, snapFrom.current) : null), [nav, gps]);
   const tol = Math.max(25, Math.min(gps?.acc ?? 0, 45)); // ennyi méteren belül „az úton vagyunk”
   const onRoute = !!snap && snap.dist <= tol;
+  // a cél címének újságjai, az aktuális jelölésekkel (a listából vagy a térkép adataiból)
+  const navStop = nav ? (stops.find((s) => s.id === nav.to.id) ?? mapStops.find((s) => s.id === nav.to.id) ?? nav.to) : null;
+  const navPapers = navStop ? navStop.stop_papers.map((p) => ({ p, st: dv[p.id] as string | undefined })) : [];
+  // A cél közelében: a térkép kicsire vált, és a lista a cél címére görget (kiemelve), hogy lásd, mit kell leadni.
+  const nearDone = useRef("");
+  const showTarget = (s: Stop) => {
+    setFull(false); setDrive(false); setFlt(""); setQ("");
+    setPicked(s.id); setPickNote("🎯 A célhoz értél – ezeket kell leadni"); pickScrolled.current = false; setPickTick((t) => t + 1);
+  };
   useEffect(() => {
     if (!nav || !gps || !snap) return;
-    if (hav(gps, { lat: nav.to.lat!, lon: nav.to.lon! }) < 20 || (onRoute && nav.dist - snap.along < 15)) {
+    const straight = hav(gps, { lat: nav.to.lat!, lon: nav.to.lon! });
+    const left = onRoute ? nav.dist - snap.along : straight;
+    if (nearDone.current !== nav.to.id && (straight < 50 || left < 60)) {
+      nearDone.current = nav.to.id;
+      showTarget(nav.to);
+      if (voice && typeof speechSynthesis !== "undefined") {
+        const ps = navPapers.filter((x) => !x.st || x.st === "missing").map((x) => x.p.paper).join(", ");
+        const u = new SpeechSynthesisUtterance(`Közel vagy: ${nav.to.address}.${ps ? " Leadandó: " + ps : ""}`); u.lang = "hu-HU"; speechSynthesis.cancel(); speechSynthesis.speak(u);
+      }
+    }
+    if (straight < 20 || (onRoute && nav.dist - snap.along < 15)) {
+      if (nearDone.current !== nav.to.id) { nearDone.current = nav.to.id; showTarget(nav.to); }
       setNav(null); setDrive(false); setFull(false); setMsg(`Megérkeztél: ${nav.to.address}`);
       if (voice && typeof speechSynthesis !== "undefined") { const u = new SpeechSynthesisUtterance("Megérkeztél"); u.lang = "hu-HU"; speechSynthesis.speak(u); }
       return;
@@ -552,6 +575,7 @@ export default function Page() {
     return best ? { s: best, d: here ? bd : null } : null;
   }, [stops, dv, here]);
 
+  const infoStop = infoId ? (stops.find((s) => s.id === infoId) ?? mapStops.find((s) => s.id === infoId) ?? null) : null;
   const restN = new Map(restOrder.map((id, i) => [id, i + 1]));
   // „Hátralévő útvonal” módban (vagy a „Hátralévő” szűrőnél) a már elintézett címek nem látszanak a térképen
   const hideDone = restOnly || flt === "todo";
@@ -627,13 +651,13 @@ export default function Page() {
       else if (++n > 30) clearInterval(t);
     }, 100);
     return () => clearInterval(t);
-  }, [picked, stops]);
+  }, [picked, stops, pickTick]);
   const renderCard = (s: Stop, i: number, tag?: string) => {
     const d = handled(s);
     if (flt && !tag && !s.stop_papers.some((p) => (flt === "todo" ? !dv[p.id] : dv[p.id] === flt))) return null;
     return (
       <div key={s.id} id={"c" + s.id} onClick={(e) => { if (!(e.target as HTMLElement).closest("button, a, input, select")) showOnMap(s); }} className={`card${d ? " done" : ""}${nx?.s.id === s.id && showMap && !tag ? " nx" : ""}${picked === s.id ? " sel" : ""}`}>
-        {picked === s.id && <div className="selhd"><span>📍 A térképen kiválasztott cím</span><button onClick={() => { setPicked(""); setFocus(null); }} aria-label="Kijelölés megszüntetése">✕</button></div>}
+        {picked === s.id && <div className="selhd"><span>{pickNote || "📍 A térképen kiválasztott cím"}</span><button onClick={() => { setPicked(""); setFocus(null); }} aria-label="Kijelölés megszüntetése">✕</button></div>}
         <div className="top">
           <div><div className="ad">{i >= 0 ? `${i + 1}. ` : ""}{s.address}</div>{(s.name || tag) && <div className="nm">{s.name}{tag && ` · ${tag}. túra`}</div>}</div>
           <div style={{ display: "flex", gap: 4, height: "fit-content" }}>
@@ -689,14 +713,21 @@ export default function Page() {
           <>
             <div className={`mapwrap${full ? " full" : ""}${nav ? "" : " nonav"}`}>
               <MapView focus={focus} pins={pins} me={shownMe} heading={shownHeading} line={nav?.coords ?? routeLine} cut={nav && onRoute && snap ? { i: snap.i, pt: snap.pt } : null}
-                follow={!!nav} drive={drive} full={full} onPick={(id) => {
+                follow={!!nav} drive={drive} full={full} info={infoStop ? {
+                  id: infoStop.id, lat: infoStop.lat!, lon: infoStop.lon!, title: infoStop.address,
+                  sub: [infoStop.name, infoStop.route_id && `${infoStop.route_id}. túra`].filter(Boolean).join(" · "),
+                  note: infoStop.note, papers: infoStop.stop_papers.map((p) => ({ name: p.paper, st: dv[p.id] })),
+                } : null} onInfoClose={() => setInfoId("")} onPick={(id) => {
                 const selected = mapStops.find((s) => s.id === id);
                 if (!selected) return;
+                // első koppintás: kis ablak a címmel és az újságokkal; második (ugyanarra): ugrás a listában a címhez
+                if (infoId !== id) { setInfoId(id); return; }
+                setInfoId("");
                 if (selected.route_id && selected.route_id !== route) setRoute(selected.route_id);
                 if (full) { setFull(false); setDrive(false); }
                 // a szűrő vagy a keresés ne rejtse el a kiválasztott címet (pl. leadott cím a „Hátralévő” szűrőnél)
                 setFlt(""); setQ("");
-                setPicked(id); pickScrolled.current = false; setFocus(null);
+                setPicked(id); setPickNote(""); pickScrolled.current = false; setFocus(null); setPickTick((t) => t + 1);
               }} />
               <div className="mapctl">
                 <button title={full ? "Kicsinyítés" : "Teljes képernyő"} onClick={() => setFull(!full)}>{full ? "✕" : "⛶"}</button>
@@ -722,7 +753,18 @@ export default function Page() {
                   </div>
                   <div className="navbot">
                     <div><b>{Math.max(1, Math.round(remT / 60))} perc</b> · {fmtDist(rem)} · érkezés {eta}</div>
-                    <div className="nm" style={{ color: "inherit", opacity: .8 }}>Cél: {nav.to.address}{!onRoute && gps ? " · letértél az útvonalról" : ""}</div>
+                    <div className="navdest"><b>📍 {nav.to.address}</b>{nav.to.name ? ` · ${nav.to.name}` : ""}{!onRoute && gps ? " · letértél az útvonalról" : ""}</div>
+                    {navStop && navPapers.length > 0 && (
+                      <div className="navpap">
+                        <span>Leadandó:</span>
+                        {navPapers.map(({ p, st }) => (
+                          <button key={p.id} className={`chip ${st ?? ""}${!st || st === "missing" ? " todo" : ""}`} onClick={() => cycle(navStop, p)}>
+                            {p.paper}{st ? " · " + LABEL[st] : ""}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {navStop?.note && <div className="sn">⚠ {navStop.note}</div>}
                     <div className="mt" style={{ marginTop: 6 }}>
                       <button onClick={() => startNav(nav.to, true)}>Újratervezés</button>
                       <button className={voice ? "on" : ""} onClick={() => setVoice(!voice)}>🔊 Hang</button>

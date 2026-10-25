@@ -5,6 +5,8 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
+export type Info = { id: string; lat: number; lon: number; title: string; sub: string; note: string; papers: { name: string; st?: string }[] };
+const ST_LABEL: Record<string, string> = { delivered: "Leadva", missing: "Hiányzik", cancelled: "Lemondva" };
 export type Pin = { id: string; n: number; t?: string; lat: number; lon: number; cls: string; label: string }; // t: a körben megjelenő szöveg (alapból n)
 type LL = { lat: number; lon: number; acc?: number };
 type Props = {
@@ -17,7 +19,9 @@ type Props = {
   follow: boolean;            // navigáció fut: kövesse a helyzetet
   drive: boolean;             // „vezetés” nézet: döntött, menetirány szerint forgatott
   full: boolean;              // teljes képernyő (csak a méretváltás miatt kell)
-  focus?: { lat: number; lon: number; label: string; k: number } | null; // a listában rábökött cím: odarepül és kiemeli
+  focus?: { lat: number; lon: number; label: string; k: number } | null;
+  info?: Info | null;          // egy kattintás a címre: kis ablak a címmel és az újságokkal
+  onInfoClose?: () => void; // a listában rábökött cím: odarepül és kiemeli
 };
 
 const STYLE: maplibregl.StyleSpecification = {
@@ -57,7 +61,7 @@ function pinImage(id: string) {
 const ARROW = `<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="17" fill="#fff" opacity=".9"/><path d="M20 5 L31 32 L20 26 L9 32 Z" fill="#1a73e8" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
 const DOT = `<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="10" fill="#1a73e8" stroke="#fff" stroke-width="3.5"/></svg>`;
 
-export default function Map({ pins, me, heading, onPick, line, cut, follow, drive, full, focus }: Props) {
+export default function Map({ pins, me, heading, onPick, line, cut, follow, drive, full, focus, info, onInfoClose }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [ready, setReady] = useState(false);
@@ -93,6 +97,8 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
     map.on("dragstart", userMove);
     map.on("styleimagemissing", (e) => { if (e.id.startsWith("pin|") && !map.hasImage(e.id)) map.addImage(e.id, pinImage(e.id), { pixelRatio: 2 }); });
     map.on("click", "pins", (e) => { const id = e.features?.[0]?.properties?.id; if (id) pickRef.current(String(id)); });
+    // dupla koppintás a címre ne nagyítson (a második koppintás a listához visz)
+    map.on("dblclick", "pins", (e) => e.preventDefault());
     map.on("mouseenter", "pins", () => { map.getCanvas().style.cursor = "pointer"; });
     map.on("mouseleave", "pins", () => { map.getCanvas().style.cursor = ""; });
     map.on("zoomend", (e) => { if ((e as { originalEvent?: unknown }).originalEvent) zoomRef.current = map.getZoom(); });
@@ -154,6 +160,56 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
       .setLngLat([focus.lon, focus.lat]).setDOMContent(lab).addTo(map);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus?.k, ready]);
+
+  // --- kis ablak (tooltip) a rábökött címhez: név + leadandó újságok ---
+  const infoPop = useRef<maplibregl.Popup | null>(null);
+  const infoCloseRef = useRef(onInfoClose); infoCloseRef.current = onInfoClose;
+  const infoKey = info ? JSON.stringify(info) : "";
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !info) { infoPop.current?.remove(); infoPop.current = null; return; }
+    const box = document.createElement("div");
+    box.className = "pin-info";
+    const h = box.appendChild(document.createElement("b")); h.textContent = info.title;
+    if (info.sub) { const n = box.appendChild(document.createElement("div")); n.className = "pi-sub"; n.textContent = info.sub; }
+    if (info.note) { const n = box.appendChild(document.createElement("div")); n.className = "pi-note"; n.textContent = "⚠ " + info.note; }
+    const ul = box.appendChild(document.createElement("div")); ul.className = "pi-pap";
+    for (const p of info.papers) {
+      const c = ul.appendChild(document.createElement("span"));
+      c.className = `pi-chip ${p.st ?? "todo"}`;
+      c.textContent = p.st ? `${p.name} · ${ST_LABEL[p.st] ?? p.st}` : p.name;
+    }
+    const go = box.appendChild(document.createElement("button"));
+    go.className = "pi-go"; go.textContent = "Ugrás a címhez a listában ›";
+    go.onclick = () => pickRef.current(info.id);
+    const hint = box.appendChild(document.createElement("div")); hint.className = "pi-hint"; hint.textContent = "(vagy koppints még egyszer a címre)";
+    if (!infoPop.current) {
+      infoPop.current = new maplibregl.Popup({ closeButton: true, closeOnClick: false, offset: 18, maxWidth: "260px", className: "pin-pop", anchor: "bottom" });
+      infoPop.current.on("close", () => { infoPop.current = null; infoCloseRef.current?.(); });
+    }
+    infoPop.current.setLngLat([info.lon, info.lat]).setDOMContent(box);
+    if (!infoPop.current.isOpen()) {
+      infoPop.current.addTo(map);
+      // a címet a térkép alsó részére toljuk, hogy a fölötte nyíló ablak ne lógjon le a kis térképről
+      // (kis késleltetéssel, hogy egy gyors dupla koppintás második fele még a címet érje)
+      const pop = infoPop.current;
+      if (!track) setTimeout(() => {
+        if (infoPop.current !== pop || !pop.isOpen()) return;
+        const H = map.getContainer().clientHeight;
+        map.easeTo({ center: [info.lon, info.lat], offset: [0, Math.round(H * 0.3)], duration: 400 });
+      }, 450);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [infoKey, ready]);
+  // a térkép üres részére kattintva bezárul
+  useEffect(() => {
+    const map = mapRef.current; if (!map || !ready) return;
+    const off = (e: maplibregl.MapMouseEvent) => {
+      if (!map.queryRenderedFeatures(e.point, { layers: ["pins"] }).length) infoPop.current?.remove();
+    };
+    map.on("click", off);
+    return () => { map.off("click", off); };
+  }, [ready]);
 
   // --- útvonal (navigáció közben csak a hátralévő rész) ---
   useEffect(() => {
