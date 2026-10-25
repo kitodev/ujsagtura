@@ -173,6 +173,8 @@ export default function Page() {
   const [nav, setNav] = useState<Nav | null>(null);
   const [routeLine, setRouteLine] = useState<[number, number][] | null>(null);
   const [routeLineMsg, setRouteLineMsg] = useState("");
+  const [restOnly, setRestOnly] = useState(false);           // csak a hátralévő címek útvonala
+  const [restOrder, setRestOrder] = useState<string[]>([]);  // a hátralévő címek újraszámolt sorrendje
   const [idx, setIdx] = useState(0);
   const [voice, setVoice] = useState(false);
   const [heading, setHeading] = useState<number | null>(null); // menetirány (GPS / mozgás / iránytű)
@@ -524,30 +526,58 @@ export default function Page() {
     return best ? { s: best, d: here ? bd : null } : null;
   }, [stops, dv, here]);
 
+  const restN = new Map(restOrder.map((id, i) => [id, i + 1]));
   const pins: Pin[] = mapStops.flatMap((s) => s.lat == null || s.lon == null ? [] : [{
-    id: s.id, n: s.position, lat: s.lat, lon: s.lon, label: `${s.address} · ${s.route_id} túra`,
-    cls: handled(s) ? "d" : s.stop_papers.some((p) => dv[p.id]) ? "h" : nx?.s.id === s.id ? "n" : "",
+    id: s.id, n: restN.get(s.id) ?? s.position,
+    // hátralévő módban a már kész címek pipát kapnak, hogy ne keveredjenek az új sorszámokkal
+    t: restOnly && s.route_id === route && !restN.has(s.id) ? "✓" : undefined, lat: s.lat, lon: s.lon, label: `${s.address} · ${s.route_id} túra`,
+    cls: restN.has(s.id)
+      ? (restN.get(s.id) === 1 ? "n" : s.stop_papers.some((p) => dv[p.id]) ? "h" : "") // hátralévő: az első narancs
+      : handled(s) ? "d" : s.stop_papers.some((p) => dv[p.id]) ? "h" : nx?.s.id === s.id ? "n" : "",
   }]);
+  // „Hátralévő útvonal” mód: csak azok a címek, ahol van még le nem adott újság (jelöletlen vagy „Hiányzik”),
+  // a sorrendet a jelenlegi helyzetből újraszámolja; a leadott / lemondott címek kimaradnak az útvonalból.
+  const pending = (s: Stop) => s.stop_papers.some((p) => !dv[p.id] || dv[p.id] === "missing");
+  const restKey = restOnly ? stops.filter(pending).map((s) => s.id).join(",") : "";
+  const gpsRef = useRef(gps); gpsRef.current = gps;
   useEffect(() => {
     if (!showMap || nav) return;
     const located = stops.filter((s): s is Stop & { lat: number; lon: number } => s.lat != null && s.lon != null);
-    setRouteLine(located.map((s) => [s.lat, s.lon]));
     const missing = stops.length - located.length;
-    setRouteLineMsg(missing ? `${located.length} / ${stops.length} cím a térképen · ${missing} cím helye hiányzik` : "");
-    if (located.length < 2) return;
+    let pts: { lat: number; lon: number }[] = located;
+    const here = gpsRef.current;
+    if (restOnly) {
+      const rest = bestOrder(located.filter(pending), here);
+      setRestOrder(rest.map((s) => s.id));
+      pts = here && rest.length ? [here, ...rest] : rest;
+      setRouteLineMsg(rest.length
+        ? `Hátralévő útvonal: ${rest.length} cím${here ? " a jelenlegi helyzetedtől" : ""} (újraszámolva)`
+        : "Minden cím le van adva – nincs hátralévő útvonal.");
+    } else {
+      setRestOrder([]);
+      setRouteLineMsg(missing ? `${located.length} / ${stops.length} cím a térképen · ${missing} cím helye hiányzik` : "");
+    }
+    setRouteLine(pts.length ? pts.map((s) => [s.lat, s.lon]) : null);
+    if (pts.length < 2) return;
 
     const controller = new AbortController();
-    const coordinates = located.map((s) => `${s.lon},${s.lat}`).join(";");
-    fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`, { signal: controller.signal })
-      .then((r) => { if (!r.ok) throw new Error("Route request failed"); return r.json(); })
-      .then((data) => {
-        const coords = data.routes?.[0]?.geometry?.coordinates as [number, number][] | undefined;
-        if (!coords?.length) throw new Error("No route geometry");
-        setRouteLine(coords.map(([lon, lat]) => [lat, lon]));
-      })
-      .catch((e) => { if (e.name !== "AbortError") setRouteLineMsg((m) => `${m}${m ? " · " : ""}Az úthálózati útvonal nem érhető el; egyenes szakaszok láthatók.`); });
-    return () => controller.abort();
-  }, [showMap, route, stops, nav]);
+    // jelöléskor ne kérjünk azonnal új útvonalat minden koppintásra
+    const t = setTimeout(() => {
+      const coordinates = pts.map((s) => `${s.lon},${s.lat}`).join(";");
+      fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`, { signal: controller.signal })
+        .then((r) => { if (!r.ok) throw new Error("Route request failed"); return r.json(); })
+        .then((data) => {
+          const r0 = data.routes?.[0];
+          const coords = r0?.geometry?.coordinates as [number, number][] | undefined;
+          if (!coords?.length) throw new Error("No route geometry");
+          setRouteLine(coords.map(([lon, lat]) => [lat, lon]));
+          if (restOnly) setRouteLineMsg((m) => `${m} · ${(r0.distance / 1000).toFixed(1)} km, kb. ${Math.round(r0.duration / 60)} perc`);
+        })
+        .catch((e) => { if (e.name !== "AbortError") setRouteLineMsg((m) => `${m}${m ? " · " : ""}Az úthálózati útvonal nem érhető el; egyenes szakaszok láthatók.`); });
+    }, restOnly ? 600 : 0);
+    return () => { clearTimeout(t); controller.abort(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMap, route, stops, nav, restOnly, restKey]);
   // a megjelenített helyzet és irány: navigáció közben az útra illesztve (mint a Google Maps-nél)
   const shownHeading = onRoute && snap && (heading == null || angDiff(heading, snap.seg) < 50) ? snap.seg : heading;
   const shownMe = nav && onRoute && snap && gps ? { lat: snap.pt[0], lon: snap.pt[1], acc: gps.acc } : gps;
@@ -663,7 +693,7 @@ export default function Page() {
             </div>
             <div className="meta" style={{ marginTop: 6 }}>{pins.length} / {mapStops.length} cím helye látható a térképen{pins.length < mapStops.length ? ` · ${mapStops.length - pins.length} hely keresése folyamatban vagy sikertelen` : " · minden túra"}</div>
             {routeLineMsg && <div className="meta" style={{ marginTop: 6 }}>{routeLineMsg}</div>}
-            <div className="mt" style={{ margin: "8px 0" }}><button disabled={mapping} onClick={mapAndSort}>{mapping ? "Feltérképezés…" : "Címek feltérképezése"}</button><button disabled={mapping} onClick={async () => { if (!confirm("A túra minden címének helyét újraszámolja, a kézzel javítottakat is. Folytatod?")) return; setMapping(true); try { await geocode(true, route); await sortByProximity(true); } finally { setMapping(false); } }}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button></div>
+            <div className="mt" style={{ margin: "8px 0" }}><button disabled={mapping} onClick={mapAndSort}>{mapping ? "Feltérképezés…" : "Címek feltérképezése"}</button><button disabled={mapping} onClick={async () => { if (!confirm("A túra minden címének helyét újraszámolja, a kézzel javítottakat is. Folytatod?")) return; setMapping(true); try { await geocode(true, route); await sortByProximity(true); } finally { setMapping(false); } }}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button><button className={restOnly ? "on" : ""} onClick={() => setRestOnly(!restOnly)}>{restOnly ? "Teljes útvonal" : "Hátralévő útvonal"}</button></div>
             {msg && <div className="meta">{msg}</div>}
             {nx && !nav && <div className="nxb">Legközelebbi: <b>{nx.s.address}</b>{nx.d != null && ` (${Math.round(nx.d)} m)`} · <button className="all" style={{ color: "#fff", borderColor: "#fff" }} onClick={() => startNav(nx.s)}>Navigálás</button></div>}
           </>

@@ -5,7 +5,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
-export type Pin = { id: string; n: number; lat: number; lon: number; cls: string; label: string };
+export type Pin = { id: string; n: number; t?: string; lat: number; lon: number; cls: string; label: string }; // t: a körben megjelenő szöveg (alapból n)
 type LL = { lat: number; lon: number; acc?: number };
 type Props = {
   pins: Pin[];
@@ -106,12 +106,12 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
   }, []);
 
   // --- címek jelölői (csak akkor frissül, ha tényleg változott valami) ---
-  const pinData = pins.map((p) => `${p.id}|${p.cls}|${p.n}|${p.lat},${p.lon}`).join(";");
+  const pinData = pins.map((p) => `${p.id}|${p.cls}|${p.t ?? p.n}|${p.lat},${p.lon}`).join(";");
   useEffect(() => {
     const src = ready ? (mapRef.current?.getSource("pins") as maplibregl.GeoJSONSource | undefined) : undefined;
     if (!src) return;
     src.setData({ type: "FeatureCollection", features: pins.map((p) => ({
-      type: "Feature", properties: { id: p.id, n: p.n, icon: `pin|${p.cls}|${p.n}` },
+      type: "Feature", properties: { id: p.id, n: p.n, icon: `pin|${p.cls}|${p.t ?? p.n}` },
       geometry: { type: "Point", coordinates: [p.lon, p.lat] } })) });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, pinData]);
