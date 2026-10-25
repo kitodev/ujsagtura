@@ -144,13 +144,23 @@ function bestOrder<T extends LL>(pts: T[], start: LL | null): T[] {
 }
 
 export default function Page() {
-  const day = useMemo(() => new Date().toLocaleDateString("sv-SE"), []);
+  // A kiválasztott nap: alapból a mai. Korábbi napra váltva az aznapi jelölések látszanak és szerkeszthetők.
+  const today = new Date().toLocaleDateString("sv-SE");
+  const [day, setDay] = useState(today);
+  const dayRef = useRef(day); dayRef.current = day;
+  const shiftDay = (n: number) => {
+    const d = new Date(day + "T12:00:00"); d.setDate(d.getDate() + n);
+    const x = d.toLocaleDateString("sv-SE");
+    if (x <= today) setDay(x);
+  };
+  useEffect(() => { setDv({}); }, [day]); // napváltáskor az előző nap jelölései ne keveredjenek bele
   const [routes, setRoutes] = useState<Route[]>([]);
   const [route, setRoute] = useState("");
   const [stops, setStops] = useState<Stop[]>([]);
   const [mapStops, setMapStops] = useState<Stop[]>([]);
   const [dv, setDv] = useState<Record<string, string>>({});
-  const [only, setOnly] = useState(false);
+  // szűrés állapot szerint: "" = mind, todo = hátralévő, vagy egy jelölés
+  const [flt, setFlt] = useState<"" | "todo" | "delivered" | "missing" | "cancelled">("");
   const [showMap, setShowMap] = useState(false);
   const [gps, setGps] = useState<{ lat: number; lon: number; acc?: number } | null>(null);
   const [last, setLast] = useState<Stop | null>(null);
@@ -176,9 +186,15 @@ export default function Page() {
 
   const load = useCallback(async (r: string) => {
     const d = await api(`/api/stops?route=${encodeURIComponent(r)}&day=${day}`);
+    if (dayRef.current !== day) return; // időközben másik napra váltottunk
     setStops(d.stops);
     setTick((t) => t + 1);
-    setDv(d.deliveries);
+    // csak ennek a túrának az újságjait frissítjük (a térkép a többi túra jelöléseit is tartja)
+    setDv((o) => {
+      const c = { ...o };
+      for (const s of d.stops as Stop[]) for (const p of s.stop_papers) delete c[p.id];
+      return { ...c, ...d.deliveries };
+    });
     api("/api/meta").then(setMeta).catch(() => {});
   }, [day]);
   useEffect(() => { if (route) load(route); }, [route, load]);
@@ -186,6 +202,7 @@ export default function Page() {
   useEffect(() => {
     if (!showMap) return;
     api(`/api/stops?route=all&day=${day}`).then((d) => {
+      if (dayRef.current !== day) return;
       setMapStops(visStops(d.stops));
       setDv((o) => ({ ...o, ...d.deliveries }));
     }).catch(() => setMsg("A címek betöltése a térképhez nem sikerült."));
@@ -545,7 +562,7 @@ export default function Page() {
   const note = routes.find((r) => r.id === route)?.note;
   const renderCard = (s: Stop, i: number, tag?: string) => {
     const d = handled(s);
-    if (only && d && !tag) return null;
+    if (flt && !tag && !s.stop_papers.some((p) => (flt === "todo" ? !dv[p.id] : dv[p.id] === flt))) return null;
     return (
       <div key={s.id} id={"c" + s.id} className={`card${d ? " done" : ""}${nx?.s.id === s.id && showMap && !tag ? " nx" : ""}`}>
         <div className="top">
@@ -572,9 +589,15 @@ export default function Page() {
       <header>
         <div className="tabs">{routes.map((r) => <button key={r.id} className={r.id === route ? "on" : ""} onClick={() => setRoute(r.id)}>{r.name}</button>)}</div>
         <div className="bar"><i style={{ width: `${all.length ? (done / all.length) * 100 : 0}%` }} /></div>
-        <div className="meta">{done} / {all.length} újság kezelve · {day}</div>
+        <div className="meta">{done} / {all.length} újság kezelve</div>
+        <div className="day">
+          <button onClick={() => shiftDay(-1)} aria-label="Előző nap">◀</button>
+          <input type="date" value={day} max={today} onChange={(e) => e.target.value && setDay(e.target.value > today ? today : e.target.value)} />
+          <button onClick={() => shiftDay(1)} disabled={day >= today} aria-label="Következő nap">▶</button>
+          {day !== today && <button className="on" onClick={() => setDay(today)}>Ma</button>}
+        </div>
+        {day !== today && <div className="past">📅 {new Date(day + "T12:00:00").toLocaleDateString("hu-HU", { year: "numeric", month: "long", day: "numeric", weekday: "long" })} – a jelölések erre a napra kerülnek</div>}
         <div className="tools">
-          <button onClick={() => setOnly(!only)}>{only ? "Mind mutat" : "Csak hátralévők"}</button>
           <button onClick={summary}>Összesítő</button>
           <button className={showMap ? "on" : ""} onClick={() => setShowMap(!showMap)}>Térkép</button>
           <button onClick={() => sortByProximity()} disabled={!stops.length}>Közelség szerinti sorrend</button>
@@ -586,6 +609,13 @@ export default function Page() {
       </header>
       <main>
         <input className="srch" placeholder="🔎 Keresés: utca, házszám vagy név (minden túrában)" value={q} onChange={(e) => setQ(e.target.value)} />
+        {!q.trim() && (() => {
+          const c = { todo: 0, delivered: 0, missing: 0, cancelled: 0 } as Record<string, number>;
+          all.forEach((p) => { c[dv[p.id] ?? "todo"]++; });
+          const B = (k: typeof flt, t: string, n?: number) => (
+            <button className={`f-${k || "all"}${flt === k ? " on" : ""}`} onClick={() => setFlt(flt === k ? "" : k)}>{t}{n != null && <b> {n}</b>}</button>);
+          return <div className="flt">{B("", "Mind", all.length)}{B("todo", "Hátralévő", c.todo)}{B("delivered", "Leadva", c.delivered)}{B("missing", "Hiányzik", c.missing)}{B("cancelled", "Lemondva", c.cancelled)}</div>;
+        })()}
         {showMap && (
           <>
             <div className={`mapwrap${full ? " full" : ""}${nav ? "" : " nonav"}`}>

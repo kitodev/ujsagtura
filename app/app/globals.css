@@ -50,4 +50,14 @@ pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;
 .sug{position:absolute;left:0;right:0;top:100%;background:var(--card);border:1px solid var(--bd);border-radius:8px;z-index:5;max-height:220px;overflow:auto}
 .sug button{display:block;width:100%;text-align:left;padding:10px;border:0;background:none;color:var(--tx);font:inherit}
 .sug button+button{border-top:1px solid var(--bd)}
+.day{display:flex;gap:6px;align-items:center;margin-top:6px}
+.day input{flex:1;min-width:0;padding:7px 8px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--tx);font-size:15px}
+.day button{padding:7px 12px;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:10px}
+.day button.on{background:var(--ac);color:#fff;border-color:var(--ac)}.day button:disabled{opacity:.4}
+.past{margin-top:6px;background:#fff3cd;color:#5c4400;border-radius:8px;padding:6px 9px;font-size:13px;font-weight:600}
+.flt{display:flex;gap:4px;margin:-2px 0 10px}
+.flt button{flex:1 1 0;min-width:0;padding:5px 2px;border-radius:12px;line-height:1.2;border:1px solid var(--bd);background:var(--card);color:var(--tx);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.flt button.on{color:#fff;border-color:transparent}
+.flt .f-all.on,.flt .f-todo.on{background:var(--ac)}.flt .f-delivered.on{background:var(--ok)}.flt .f-missing.on{background:var(--mi)}.flt .f-cancelled.on{background:var(--ca)}
 .srch{width:100%;padding:11px 12px;margin-bottom:10px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--tx)}
+.flt button b{display:block;font-size:14px}
