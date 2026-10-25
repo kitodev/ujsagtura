@@ -17,6 +17,7 @@ type Props = {
   follow: boolean;            // navigáció fut: kövesse a helyzetet
   drive: boolean;             // „vezetés” nézet: döntött, menetirány szerint forgatott
   full: boolean;              // teljes képernyő (csak a méretváltás miatt kell)
+  focus?: { lat: number; lon: number; label: string; k: number } | null; // a listában rábökött cím: odarepül és kiemeli
 };
 
 const STYLE: maplibregl.StyleSpecification = {
@@ -56,7 +57,7 @@ function pinImage(id: string) {
 const ARROW = `<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="17" fill="#fff" opacity=".9"/><path d="M20 5 L31 32 L20 26 L9 32 Z" fill="#1a73e8" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
 const DOT = `<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="10" fill="#1a73e8" stroke="#fff" stroke-width="3.5"/></svg>`;
 
-export default function Map({ pins, me, heading, onPick, line, cut, follow, drive, full }: Props) {
+export default function Map({ pins, me, heading, onPick, line, cut, follow, drive, full, focus }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [ready, setReady] = useState(false);
@@ -124,10 +125,35 @@ export default function Map({ pins, me, heading, onPick, line, cut, follow, driv
     map.fitBounds(b, { padding: 40, maxZoom: 17, duration: 600, bearing: 0, pitch: 0 });
   };
   const pinKey = pins.map((p) => `${p.lat},${p.lon}`).join(";");
-  useEffect(() => { if (!track && pins.length) fit(pins.map((p) => [p.lat, p.lon])); // eslint-disable-next-line react-hooks/exhaustive-deps
+  // amíg egy listából kiválasztott címet mutatunk, a térkép ne ugorjon el automatikusan
+  const focusOn = !!focus;
+  useEffect(() => { if (!track && !focusOn && pins.length) fit(pins.map((p) => [p.lat, p.lon])); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinKey]);
-  useEffect(() => { if (!track && line?.length) fit(line); // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!track && !focusOn && line?.length) fit(line); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [line]);
+
+  // --- a listában kiválasztott cím: odarepülés, lüktető jelölés és felirat ---
+  const focusMk = useRef<maplibregl.Marker | null>(null);
+  const focusPop = useRef<maplibregl.Popup | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    focusMk.current?.remove(); focusPop.current?.remove();
+    focusMk.current = null; focusPop.current = null;
+    if (!map || !ready || !focus) return;
+    if (follow || drive) setFree(true); // követés közben is odaugrik; a „Középre” gombbal vissza
+    map.flyTo({ center: [focus.lon, focus.lat], zoom: Math.max(map.getZoom(), 17), bearing: 0, pitch: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 900, essential: true });
+    // a külső elemet a MapLibre mozgatja (transform), ezért a lüktetés egy belső elemen fut
+    const el = document.createElement("div");
+    el.style.pointerEvents = "none";
+    el.appendChild(document.createElement("div")).className = "focus-ring";
+    focusMk.current = new maplibregl.Marker({ element: el }).setLngLat([focus.lon, focus.lat]).addTo(map);
+    const lab = document.createElement("div");
+    lab.className = "focus-lab";
+    lab.textContent = focus.label;
+    focusPop.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 22, anchor: "bottom", className: "focus-pop" })
+      .setLngLat([focus.lon, focus.lat]).setDOMContent(lab).addTo(map);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.k, ready]);
 
   // --- útvonal (navigáció közben csak a hátralévő rész) ---
   useEffect(() => {

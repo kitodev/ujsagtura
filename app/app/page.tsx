@@ -176,6 +176,21 @@ export default function Page() {
   const [restOnly, setRestOnly] = useState(false);
   const [picked, setPicked] = useState("");          // a térképen rábökött cím (kiemelve a listában)
   const pickScrolled = useRef(false);
+  // a listában rábökött cím megmutatása a térképen
+  const [focus, setFocus] = useState<{ lat: number; lon: number; label: string; k: number } | null>(null);
+  function showOnMap(s: Stop) {
+    setPicked(s.id); pickScrolled.current = true; // a kártya is kiemelve marad, de nem görgetünk le hozzá
+    if (s.lat == null || s.lon == null) { setFocus(null); setMsg(`„${s.address}” helye még nincs meg a térképen (Címek feltérképezése).`); }
+    else setFocus({ lat: s.lat, lon: s.lon, label: `${s.address}${s.name ? " – " + s.name : ""}`, k: Date.now() });
+    setShowMap(true);
+    // fel a térképhez (a ragadós fejléc alá)
+    setTimeout(() => {
+      const el = document.querySelector(".mapwrap") as HTMLElement | null;
+      const head = (document.querySelector("header") as HTMLElement | null)?.offsetHeight ?? 0;
+      if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - head - 8, behavior: "smooth" });
+      else window.scrollTo({ top: 0, behavior: "smooth" });
+    }, 60);
+  }
   // „fel” gomb: csak akkor látszik, ha már lejjebb görgettünk
   const [showTop, setShowTop] = useState(false);
   useEffect(() => {
@@ -617,8 +632,8 @@ export default function Page() {
     const d = handled(s);
     if (flt && !tag && !s.stop_papers.some((p) => (flt === "todo" ? !dv[p.id] : dv[p.id] === flt))) return null;
     return (
-      <div key={s.id} id={"c" + s.id} className={`card${d ? " done" : ""}${nx?.s.id === s.id && showMap && !tag ? " nx" : ""}${picked === s.id ? " sel" : ""}`}>
-        {picked === s.id && <div className="selhd"><span>📍 A térképen kiválasztott cím</span><button onClick={() => setPicked("")} aria-label="Kijelölés megszüntetése">✕</button></div>}
+      <div key={s.id} id={"c" + s.id} onClick={(e) => { if (!(e.target as HTMLElement).closest("button, a, input, select")) showOnMap(s); }} className={`card${d ? " done" : ""}${nx?.s.id === s.id && showMap && !tag ? " nx" : ""}${picked === s.id ? " sel" : ""}`}>
+        {picked === s.id && <div className="selhd"><span>📍 A térképen kiválasztott cím</span><button onClick={() => { setPicked(""); setFocus(null); }} aria-label="Kijelölés megszüntetése">✕</button></div>}
         <div className="top">
           <div><div className="ad">{i >= 0 ? `${i + 1}. ` : ""}{s.address}</div>{(s.name || tag) && <div className="nm">{s.name}{tag && ` · ${tag}. túra`}</div>}</div>
           <div style={{ display: "flex", gap: 4, height: "fit-content" }}>
@@ -673,7 +688,7 @@ export default function Page() {
         {showMap && (
           <>
             <div className={`mapwrap${full ? " full" : ""}${nav ? "" : " nonav"}`}>
-              <MapView pins={pins} me={shownMe} heading={shownHeading} line={nav?.coords ?? routeLine} cut={nav && onRoute && snap ? { i: snap.i, pt: snap.pt } : null}
+              <MapView focus={focus} pins={pins} me={shownMe} heading={shownHeading} line={nav?.coords ?? routeLine} cut={nav && onRoute && snap ? { i: snap.i, pt: snap.pt } : null}
                 follow={!!nav} drive={drive} full={full} onPick={(id) => {
                 const selected = mapStops.find((s) => s.id === id);
                 if (!selected) return;
@@ -681,7 +696,7 @@ export default function Page() {
                 if (full) { setFull(false); setDrive(false); }
                 // a szűrő vagy a keresés ne rejtse el a kiválasztott címet (pl. leadott cím a „Hátralévő” szűrőnél)
                 setFlt(""); setQ("");
-                setPicked(id); pickScrolled.current = false;
+                setPicked(id); pickScrolled.current = false; setFocus(null);
               }} />
               <div className="mapctl">
                 <button title={full ? "Kicsinyítés" : "Teljes képernyő"} onClick={() => setFull(!full)}>{full ? "✕" : "⛶"}</button>
