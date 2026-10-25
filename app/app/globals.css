@@ -59,5 +59,11 @@ pre{white-space:pre-wrap;background:var(--card);padding:10px;border-radius:10px;
 .flt button{flex:1 1 0;min-width:0;padding:5px 2px;border-radius:12px;line-height:1.2;border:1px solid var(--bd);background:var(--card);color:var(--tx);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .flt button.on{color:#fff;border-color:transparent}
 .flt .f-all.on,.flt .f-todo.on{background:var(--ac)}.flt .f-delivered.on{background:var(--ok)}.flt .f-missing.on{background:var(--mi)}.flt .f-cancelled.on{background:var(--ca)}
+.card.sel{opacity:1;border:3px solid #1a73e8;background:#e3effd;box-shadow:0 0 0 4px #1a73e840;animation:selpulse 1.2s ease-out 2}
+@media(prefers-color-scheme:dark){.card.sel{background:#16304f;border-color:#6fa8dc}}
+.selhd{display:flex;justify-content:space-between;align-items:center;margin:-2px 0 6px;color:#1a73e8;font-weight:700;font-size:13px}
+.selhd button{border:0;background:none;color:inherit;font-size:16px;padding:0 4px}
+@media(prefers-color-scheme:dark){.selhd{color:#8fc0ff}}
+@keyframes selpulse{0%{box-shadow:0 0 0 0 #1a73e8aa}100%{box-shadow:0 0 0 14px #1a73e800}}
 .srch{width:100%;padding:11px 12px;margin-bottom:10px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--tx)}
 .flt button b{display:block;font-size:14px}

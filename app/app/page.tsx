@@ -173,7 +173,9 @@ export default function Page() {
   const [nav, setNav] = useState<Nav | null>(null);
   const [routeLine, setRouteLine] = useState<[number, number][] | null>(null);
   const [routeLineMsg, setRouteLineMsg] = useState("");
-  const [restOnly, setRestOnly] = useState(false);           // csak a hátralévő címek útvonala
+  const [restOnly, setRestOnly] = useState(false);
+  const [picked, setPicked] = useState("");          // a térképen rábökött cím (kiemelve a listában)
+  const pickScrolled = useRef(false);           // csak a hátralévő címek útvonala
   const [restOrder, setRestOrder] = useState<string[]>([]);  // a hátralévő címek újraszámolt sorrendje
   const [idx, setIdx] = useState(0);
   const [voice, setVoice] = useState(false);
@@ -590,11 +592,23 @@ export default function Page() {
   }
 
   const note = routes.find((r) => r.id === route)?.note;
+  // a térképen kiválasztott cím kártyájához görgetünk, amint megjelenik (túraváltáskor a betöltés után)
+  useEffect(() => {
+    if (!picked || pickScrolled.current) return;
+    let n = 0;
+    const t = setInterval(() => {
+      const el = document.getElementById("c" + picked);
+      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); pickScrolled.current = true; clearInterval(t); }
+      else if (++n > 30) clearInterval(t);
+    }, 100);
+    return () => clearInterval(t);
+  }, [picked, stops]);
   const renderCard = (s: Stop, i: number, tag?: string) => {
     const d = handled(s);
     if (flt && !tag && !s.stop_papers.some((p) => (flt === "todo" ? !dv[p.id] : dv[p.id] === flt))) return null;
     return (
-      <div key={s.id} id={"c" + s.id} className={`card${d ? " done" : ""}${nx?.s.id === s.id && showMap && !tag ? " nx" : ""}`}>
+      <div key={s.id} id={"c" + s.id} className={`card${d ? " done" : ""}${nx?.s.id === s.id && showMap && !tag ? " nx" : ""}${picked === s.id ? " sel" : ""}`}>
+        {picked === s.id && <div className="selhd"><span>📍 A térképen kiválasztott cím</span><button onClick={() => setPicked("")} aria-label="Kijelölés megszüntetése">✕</button></div>}
         <div className="top">
           <div><div className="ad">{i >= 0 ? `${i + 1}. ` : ""}{s.address}</div>{(s.name || tag) && <div className="nm">{s.name}{tag && ` · ${tag}. túra`}</div>}</div>
           <div style={{ display: "flex", gap: 4, height: "fit-content" }}>
@@ -655,7 +669,9 @@ export default function Page() {
                 if (!selected) return;
                 if (selected.route_id && selected.route_id !== route) setRoute(selected.route_id);
                 if (full) { setFull(false); setDrive(false); }
-                window.setTimeout(() => document.getElementById("c" + id)?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
+                // a szűrő vagy a keresés ne rejtse el a kiválasztott címet (pl. leadott cím a „Hátralévő” szűrőnél)
+                setFlt(""); setQ("");
+                setPicked(id); pickScrolled.current = false;
               }} />
               <div className="mapctl">
                 <button title={full ? "Kicsinyítés" : "Teljes képernyő"} onClick={() => setFull(!full)}>{full ? "✕" : "⛶"}</button>
