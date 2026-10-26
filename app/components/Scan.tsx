@@ -1,119 +1,169 @@
 "use client";
+// Címlista beolvasása papírról (fotó → szövegfelismerés) vagy Excelből. A sorok mentés előtt javíthatók.
 import { useRef, useState } from "react";
-import { splitPapers } from "@/lib/papers";
+import { parseOcrLine, parseScanText, toScanLine, type ScanRow } from "@/lib/scan-text";
+import type { Route } from "@/lib/types";
+import { Dialog } from "./dialogs/Dialog";
 
-const PAP = ["Vas. Nemzeti Sport", "Vasárnap Reggel", "Petőfi Népe", "Magyar Nemzet", "Nemzeti Sport", "10 SzerencseMix", "Vidék Íze", "Lakáskultúra", "Autó-Motor", "Autó Motor", "Szabad Föld", "SZAKMa", "Fanny", "Blikk", "HVG", "Hot!"];
+type Props = {
+  routes: Route[];
+  route: string;
+  onSave: (rows: ScanRow[]) => Promise<void>;
+  onClose: () => void;
+};
 
-function parseLine(l: string) {
-  l = l.replace(/\s+/g, " ").trim();
-  if (l.length < 4) return null;
-  const ps: string[] = [];
-  let r = l;
-  PAP.forEach((p) => {
-    const re = new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    if (re.test(r)) { ps.push(p); r = r.replace(re, " "); }
-  });
-  r = r.replace(/\s+/g, " ").trim();
-  const m = r.match(/^(\D+?\s\d+[/\-\w]*\.?)\s*(.*)$/);
-  return `${m ? m[1] : r} | ${m ? m[2] : ""} | ${ps.join(", ")}`;
+type PreviewRow = { route: string; address: string; name: string; note: string; papers: string[] };
+
+const MAX_IMAGE_SIDE = 2000;
+const XLSX_ACCEPT = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/** A fotó előkészítése a felismeréshez: kicsinyítés, szürkeárnyalat, kontraszt. */
+async function prepareImage(file: File) {
+  const image = await createImageBitmap(file);
+  const k = Math.min(1, MAX_IMAGE_SIDE / Math.max(image.width, image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = image.width * k;
+  canvas.height = image.height * k;
+  const g = canvas.getContext("2d")!;
+  g.filter = "grayscale(1) contrast(1.3)";
+  g.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas;
 }
 
-async function prep(f: File) {
-  const im = await createImageBitmap(f), k = Math.min(1, 2000 / Math.max(im.width, im.height));
-  const c = document.createElement("canvas");
-  c.width = im.width * k; c.height = im.height * k;
-  const x = c.getContext("2d")!;
-  x.filter = "grayscale(1) contrast(1.3)";
-  x.drawImage(im, 0, 0, c.width, c.height);
-  return c;
-}
+export default function Scan({ routes, route, onSave, onClose }: Props) {
+  const [text, setText] = useState("");
+  const [chosenRoute, setChosenRoute] = useState(route);
+  const [busy, setBusy] = useState(false);
+  const [newRoute, setNewRoute] = useState(""); // az Excelben szereplő, még nem létező túra
+  const [status, setStatus] = useState("Fotózd le a címlistát (soronként egy cím, jó fényben, egyenesen).");
+  const camera = useRef<HTMLInputElement>(null);
+  const gallery = useRef<HTMLInputElement>(null);
+  const excelInput = useRef<HTMLInputElement>(null);
 
-type Row = { route_id: string; address: string; name: string; papers: string[]; note?: string };
-export default function Scan({ routes, route, onSave, onClose }: {
-  routes: { id: string; name: string }[]; route: string; onSave: (rows: Row[]) => Promise<void>; onClose: () => void;
-}) {
-  const [t, setT] = useState(""), [r0, setR] = useState(route), [busy, setBusy] = useState(false);
-  const [extra, setExtra] = useState(""); // az Excelben szereplő, még nem létező túra
-  const opts = [...routes, ...(extra && !routes.some((x) => x.id === extra) ? [{ id: extra, name: `${extra} túra (új)` }] : [])];
+  const options = [
+    ...routes,
+    ...(newRoute && !routes.some((r) => r.id === newRoute)
+      ? [{ id: newRoute, name: `${newRoute} túra (új)`, note: "" }]
+      : []),
+  ];
   // ha a kiválasztott érték nincs a listában, az első túra számít (különben üres túrába mentene)
-  const r = opts.some((x) => x.id === r0) ? r0 : opts[0]?.id ?? "";
-  const [st, setSt] = useState("Fotózd le a címlistát (soronként egy cím, jó fényben, egyenesen).");
-  const cam = useRef<HTMLInputElement>(null), pic = useRef<HTMLInputElement>(null), xl = useRef<HTMLInputElement>(null);
+  const target = options.some((r) => r.id === chosenRoute) ? chosenRoute : (options[0]?.id ?? "");
+  const append = (lines: string[]) => setText((t) => (t ? t + "\n" : "") + lines.join("\n"));
 
-  async function ocr(file: File) {
-    setBusy(true); setSt("Betöltés…");
+  async function recognize(file: File) {
+    setBusy(true);
+    setStatus("Betöltés…");
     try {
       const { createWorker } = await import("tesseract.js");
-      const w = await createWorker("hun", 1, { logger: (m) => setSt(m.status === "recognizing text" ? `Olvasás: ${Math.round(m.progress * 100)}%` : "Betöltés…") });
-      const { data } = await w.recognize(await prep(file));
-      await w.terminate();
-      const out = data.text.split("\n").map(parseLine).filter(Boolean) as string[];
-      setT((x) => (x ? x + "\n" : "") + out.join("\n"));
-      setSt(`${out.length} sor felismerve. Javítsd a hibákat (cím | név | újságok), majd Hozzáadás.`);
-    } catch { setSt("Az OCR nem sikerült (internet kell az első betöltéshez)."); }
-    setBusy(false);
-  }
-  // Excel (.xlsx) beolvasása: a sorok a szövegmezőbe kerülnek, ott még javíthatók
-  async function excel(file: File) {
-    setBusy(true); setSt("Excel beolvasása…");
-    try {
-      const fd = new FormData();
-      fd.append("file", file); fd.append("dry", "1");
-      const res = await fetch("/api/import", { method: "POST", body: fd });
-      const j = await res.json().catch(() => ({ error: "Hibás válasz a szervertől." }));
-      if (!res.ok) throw new Error(j.error ?? "Az Excel beolvasása nem sikerült.");
-      const rows = j.rows as { route: string; address: string; name: string; note: string; papers: string[] }[];
-      const c = (x: string) => x.replace(/\|/g, "/").replace(/\s+/g, " ").trim();
-      const out = rows.map((x) => {
-        const f = [x.address, x.name, x.papers.join(", "), x.note].map(c);
-        while (f.length > 1 && !f[f.length - 1]) f.pop();
-        return f.join(" | ");
+      const worker = await createWorker("hun", 1, {
+        logger: (m) =>
+          setStatus(m.status === "recognizing text" ? `Olvasás: ${Math.round(m.progress * 100)}%` : "Betöltés…"),
       });
-      setT((x) => (x ? x + "\n" : "") + out.join("\n"));
-      const tours = [...new Set(rows.map((x) => x.route).filter(Boolean))];
-      let extra = "";
-      if (tours.length === 1) {
-        const isNew = !routes.some((x) => x.id === tours[0]);
-        if (isNew) setExtra(tours[0]);
-        setR(tours[0]);
-        extra = ` A túra az Excel alapján: ${tours[0]}${isNew ? " (új túra, mentéskor létrejön)" : ""}.`;
-      }
-      else if (tours.length) extra = ` Az Excelben szereplő túra(k): ${tours.join(", ")} – válaszd ki lent, melyikbe kerüljenek.`;
-      setSt(`${out.length} cím beolvasva az Excelből.${extra} Ellenőrizd (cím | név | újságok | megjegyzés), majd Hozzáadás.`);
-    } catch (e) { setSt(e instanceof Error ? e.message : String(e)); }
+      const { data } = await worker.recognize(await prepareImage(file));
+      await worker.terminate();
+      const lines = data.text
+        .split("\n")
+        .map(parseOcrLine)
+        .filter((l): l is string => !!l);
+      append(lines);
+      setStatus(`${lines.length} sor felismerve. Javítsd a hibákat (cím | név | újságok), majd Hozzáadás.`);
+    } catch {
+      setStatus("Az OCR nem sikerült (internet kell az első betöltéshez).");
+    }
     setBusy(false);
   }
-  async function save() {
-    const rows = t.split("\n").flatMap((l) => {
-      const [a, n, p, o] = l.split("|").map((x) => x.trim());
-      if (!a) return [];
-      const ps = splitPapers(p);
-      return [{ route_id: r, address: a, name: n ?? "", papers: ps.length ? ps : ["Újság"], note: o ?? "" }];
-    });
-    if (!r) { setSt("Válassz túrát, vagy vegyél fel egyet a „+ Túra” gombbal."); return; }
-    if (rows.length) await onSave(rows); else onClose();
+
+  async function readExcel(file: File) {
+    setBusy(true);
+    setStatus("Excel beolvasása…");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("dry", "1");
+      const res = await fetch("/api/import", { method: "POST", body: form });
+      const json = await res.json().catch(() => ({ error: "Hibás válasz a szervertől." }));
+      if (!res.ok) throw new Error(json.error ?? "Az Excel beolvasása nem sikerült.");
+      const rows = json.rows as PreviewRow[];
+      append(rows.map(toScanLine));
+
+      const tours = [...new Set(rows.map((r) => r.route).filter(Boolean))];
+      let hint = "";
+      if (tours.length === 1) {
+        const isNew = !routes.some((r) => r.id === tours[0]);
+        if (isNew) setNewRoute(tours[0]);
+        setChosenRoute(tours[0]);
+        hint = ` A túra az Excel alapján: ${tours[0]}${isNew ? " (új túra, mentéskor létrejön)" : ""}.`;
+      } else if (tours.length) {
+        hint = ` Az Excelben szereplő túra(k): ${tours.join(", ")} – válaszd ki lent, melyikbe kerüljenek.`;
+      }
+      setStatus(
+        `${rows.length} cím beolvasva az Excelből.${hint} Ellenőrizd (cím | név | újságok | megjegyzés), majd Hozzáadás.`,
+      );
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
   }
-  const pick = (e: React.ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (f) ocr(f); e.target.value = ""; };
-  const pickXl = (e: React.ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (f) excel(f); e.target.value = ""; };
+
+  async function save() {
+    if (!target) {
+      setStatus("Válassz túrát, vagy vegyél fel egyet a „+ Túra” gombbal.");
+      return;
+    }
+    const rows = parseScanText(text, target);
+    if (rows.length) await onSave(rows);
+    else onClose();
+  }
+
+  const onFile = (read: (f: File) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) read(file);
+    e.target.value = "";
+  };
 
   return (
-    <div className="ov" onClick={onClose}>
-      <div className="dlg" onClick={(e) => e.stopPropagation()}>
-        <b>Beolvasás papírról</b>
-        <div className="row">
-          <button disabled={busy} onClick={() => cam.current?.click()}>📷 Fotó</button>
-          <button disabled={busy} onClick={() => pic.current?.click()}>🖼 Kép</button>
-          <button disabled={busy} onClick={() => xl.current?.click()}>📊 Excel</button>
-        </div>
-        <input ref={cam} type="file" accept="image/*" capture="environment" hidden onChange={pick} />
-        <input ref={pic} type="file" accept="image/*" hidden onChange={pick} />
-        <input ref={xl} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={pickXl} />
-        <small>{st} <a href="/api/import" style={{ color: "var(--ac)" }}>Excel minta</a></small>
-        <select value={r} onChange={(e) => setR(e.target.value)}>{opts.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
-        <textarea rows={9} value={t} onChange={(e) => setT(e.target.value)} placeholder="cím | név | újságok | megjegyzés"
-          style={{ padding: 8, border: "1px solid var(--bd)", borderRadius: 8, background: "var(--bg)", color: "var(--tx)", font: "inherit" }} />
-        <div className="row"><button onClick={onClose}>Bezár</button><button className="p" disabled={busy} onClick={save}>Hozzáadás</button></div>
+    <Dialog onClose={onClose}>
+      <b>Beolvasás papírról</b>
+      <div className="row">
+        <button disabled={busy} onClick={() => camera.current?.click()}>
+          📷 Fotó
+        </button>
+        <button disabled={busy} onClick={() => gallery.current?.click()}>
+          🖼 Kép
+        </button>
+        <button disabled={busy} onClick={() => excelInput.current?.click()}>
+          📊 Excel
+        </button>
       </div>
-    </div>
+      <input ref={camera} type="file" accept="image/*" capture="environment" hidden onChange={onFile(recognize)} />
+      <input ref={gallery} type="file" accept="image/*" hidden onChange={onFile(recognize)} />
+      <input ref={excelInput} type="file" accept={XLSX_ACCEPT} hidden onChange={onFile(readExcel)} />
+      <small>
+        {status}{" "}
+        <a href="/api/import" style={{ color: "var(--ac)" }}>
+          Excel minta
+        </a>
+      </small>
+      <select value={target} onChange={(e) => setChosenRoute(e.target.value)}>
+        {options.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.name}
+          </option>
+        ))}
+      </select>
+      <textarea
+        className="scan-text"
+        rows={9}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="cím | név | újságok | megjegyzés"
+      />
+      <div className="row">
+        <button onClick={onClose}>Bezár</button>
+        <button className="p" disabled={busy} onClick={save}>
+          Hozzáadás
+        </button>
+      </div>
+    </Dialog>
   );
 }

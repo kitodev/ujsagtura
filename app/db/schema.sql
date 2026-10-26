@@ -15,3 +15,4 @@ create table if not exists deliveries (
   updated_at timestamptz default now(),
   primary key (stop_paper_id, day));
 create index if not exists stops_route_idx on stops(route_id, position);
+create unique index if not exists stop_papers_uniq on stop_papers (stop_id, lower(btrim(paper)));

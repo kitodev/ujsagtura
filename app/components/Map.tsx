@@ -3,291 +3,446 @@
 // döntött nézetben is mehet. A saját helyzet egy irányt mutató nyíl, ami simán csúszik az új GPS-pontra.
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { angleDiff, metersPerDegree, type LatLon } from "@/lib/geo";
+import type { Pin } from "@/lib/pins";
+import {
+  createFocusLabel,
+  createFocusRing,
+  createInfoContent,
+  createMeElement,
+  setMeShape,
+  type PinInfo,
+} from "./map/dom";
+import { drawPinImage, isPinImageId, PIN_PIXEL_RATIO, pinImageId } from "./map/pinImage";
+import {
+  accuracyFeature,
+  addLayers,
+  EMPTY,
+  KISKUNHALAS,
+  lineFeature,
+  MAP_STYLE,
+  NO_PADDING,
+  PIN_LAYER,
+  SOURCE,
+} from "./map/style";
 
-export type Info = { id: string; lat: number; lon: number; title: string; sub: string; note: string; papers: { name: string; st?: string }[] };
-const ST_LABEL: Record<string, string> = { delivered: "Leadva", missing: "Hiányzik", cancelled: "Lemondva" };
-export type Pin = { id: string; n: number; t?: string; lat: number; lon: number; cls: string; label: string }; // t: a körben megjelenő szöveg (alapból n)
-type LL = { lat: number; lon: number; acc?: number };
+export type { PinInfo } from "./map/dom";
+export type MapFocus = { lat: number; lon: number; label: string; k: number };
+
 type Props = {
   pins: Pin[];
-  me: LL | null;              // a megjelenített saját helyzet (navigáció közben az útra illesztve)
-  heading: number | null;     // menetirány fokban (0 = észak), null = nem ismert
+  /** A megjelenített saját helyzet (navigáció közben az útra illesztve). */
+  me: (LatLon & { acc?: number }) | null;
+  /** Menetirány fokban (0 = észak), null = nem ismert. */
+  heading: number | null;
   onPick: (id: string) => void;
-  line: [number, number][] | null;   // [lat, lon] pontok
-  cut?: { i: number; pt: [number, number] } | null; // navigáció közben: eddig megtett rész levágása
-  follow: boolean;            // navigáció fut: kövesse a helyzetet
-  drive: boolean;             // „vezetés” nézet: döntött, menetirány szerint forgatott
-  full: boolean;              // teljes képernyő (csak a méretváltás miatt kell)
-  focus?: { lat: number; lon: number; label: string; k: number } | null;
-  info?: Info | null;          // egy kattintás a címre: kis ablak a címmel és az újságokkal
-  onInfoClose?: () => void; // a listában rábökött cím: odarepül és kiemeli
+  /** Útvonal [lat, lon] pontokkal. */
+  line: [number, number][] | null;
+  /** Navigáció közben: az eddig megtett rész levágása. */
+  cut?: { i: number; pt: [number, number] } | null;
+  /** Navigáció fut: a térkép kövesse a helyzetet. */
+  follow: boolean;
+  /** „Vezetés” nézet: döntött, menetirány szerint forgatott. */
+  drive: boolean;
+  /** Teljes képernyő (a méretváltás miatt kell). */
+  full: boolean;
+  /** A listában rábökött cím: odarepül és kiemeli. */
+  focus?: MapFocus | null;
+  /** Egy koppintás a címre: kis ablak a címmel és az újságokkal. */
+  info?: PinInfo | null;
+  onInfoClose?: () => void;
 };
 
-const STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 19, attribution: "© OpenStreetMap" } },
-  layers: [{ id: "osm", type: "raster", source: "osm" }],
-};
-const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
-const lineFC = (pts: [number, number][]): GeoJSON.FeatureCollection =>
-  pts.length < 2 ? EMPTY : { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: pts.map(([la, lo]) => [lo, la]) } }] };
-function circle(c: LL, r: number): GeoJSON.FeatureCollection {
-  const pts: number[][] = [];
-  for (let k = 0; k <= 40; k++) {
-    const a = (k / 40) * 2 * Math.PI;
-    pts.push([c.lon + (r * Math.sin(a)) / (111320 * Math.cos((c.lat * Math.PI) / 180)), c.lat + (r * Math.cos(a)) / 110540]);
-  }
-  return { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [pts] } }] };
-}
-// Címjelölők képe (szám egy színes körben). A jelölőket a térkép grafikus rétegként (WebGL) rajzolja, nem
-// külön HTML-elemként: több száz HTML-jelölőt a térkép minden mozgáskor egyenként áthelyezett, ez teljes
-// képernyőn és 3D nézetben lefagyasztotta a telefont.
-const PIN_COLOR: Record<string, string> = { "": "#666666", d: "#2e7d32", h: "#8a6d00", n: "#e08a00" };
-function pinImage(id: string) {
-  const [, cls, n] = id.split("|");
-  const r = 2, S = 28 * r, c = document.createElement("canvas");
-  c.width = c.height = S;
-  const g = c.getContext("2d")!;
-  g.beginPath(); g.arc(S / 2, S / 2, S / 2 - r, 0, 2 * Math.PI);
-  g.fillStyle = PIN_COLOR[cls] ?? PIN_COLOR[""]; g.fill();
-  g.lineWidth = 2 * r; g.strokeStyle = "#fff"; g.stroke();
-  g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
-  g.font = `bold ${(n.length > 2 ? 10 : 12) * r}px system-ui, sans-serif`;
-  g.fillText(n, S / 2, S / 2 + r / 2);
-  return { width: S, height: S, data: new Uint8Array(g.getImageData(0, 0, S, S).data.buffer) };
-}
+const DRIVE_PITCH = 50;
+const DRIVE_ZOOM = 17.5;
+const FOLLOW_ZOOM = 16.5;
+const CAMERA_MS = 900;
 
-const ARROW = `<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="17" fill="#fff" opacity=".9"/><path d="M20 5 L31 32 L20 26 L9 32 Z" fill="#1a73e8" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
-const DOT = `<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="10" fill="#1a73e8" stroke="#fff" stroke-width="3.5"/></svg>`;
+const source = (map: maplibregl.Map | null, id: string) => map?.getSource(id) as maplibregl.GeoJSONSource | undefined;
 
-export default function Map({ pins, me, heading, onPick, line, cut, follow, drive, full, focus, info, onInfoClose }: Props) {
-  const box = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
-  const [ready, setReady] = useState(false);
-  const [free, setFree] = useState(false);        // a felhasználó elhúzta a térképet → nem követünk, „Középre” gomb
-  const meMarker = useRef<maplibregl.Marker | null>(null);
-  const meEl = useRef<HTMLDivElement | null>(null);
-  const shown = useRef<LL | null>(null);          // a nyíl éppen kirajzolt helye (animációhoz)
-  const anim = useRef(0);
-  const pickRef = useRef(onPick); pickRef.current = onPick;
-  const zoomRef = useRef<number | null>(null);    // a felhasználó által követés közben beállított nagyítás
+export default function MapView(props: Props) {
+  const { pins, me, heading, line, cut, follow, drive, full, focus, info } = props;
+  const container = useRef<HTMLDivElement>(null);
+  const pickRef = useRef(props.onPick);
+  pickRef.current = props.onPick;
+  const closeInfoRef = useRef(props.onInfoClose);
+  closeInfoRef.current = props.onInfoClose;
+
+  /** A felhasználó elhúzta a térképet → nem követünk, „Középre” gomb. */
+  const [free, setFree] = useState(false);
+  /** A felhasználó által követés közben beállított nagyítás. */
+  const userZoom = useRef<number | null>(null);
   const track = (follow || drive) && !free;
 
-  // --- létrehozás ---
-  useEffect(() => {
-    if (!box.current) return;
-    const map = new maplibregl.Map({ container: box.current, style: STYLE, center: [19.485, 46.434], zoom: 14, maxPitch: 60, attributionControl: { compact: true },
-      // telefonon a 3-szoros felbontás sokszor annyi rajzolást jelent, a 2-szeres is éles
-      pixelRatio: Math.min(window.devicePixelRatio || 1, 2), fadeDuration: 0 });
-    mapRef.current = map;
-    map.on("load", () => {
-      map.addSource("route", { type: "geojson", data: EMPTY });
-      map.addSource("acc", { type: "geojson", data: EMPTY });
-      map.addLayer({ id: "acc", type: "fill", source: "acc", paint: { "fill-color": "#1a73e8", "fill-opacity": 0.12 } });
-      map.addLayer({ id: "route-casing", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#0b57d0", "line-width": ["interpolate", ["linear"], ["zoom"], 12, 5, 18, 14] } });
-      map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#4b8ff7", "line-width": ["interpolate", ["linear"], ["zoom"], 12, 3, 18, 10] } });
-      map.addSource("pins", { type: "geojson", data: EMPTY });
-      map.addLayer({ id: "pins", type: "symbol", source: "pins", layout: {
-        "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true,
-        "symbol-sort-key": ["get", "n"], "icon-pitch-alignment": "viewport" } });
-      setReady(true);
-    });
-    const userMove = (e: { originalEvent?: unknown }) => { if (e.originalEvent) setFree(true); };
-    map.on("dragstart", userMove);
-    map.on("styleimagemissing", (e) => { if (e.id.startsWith("pin|") && !map.hasImage(e.id)) map.addImage(e.id, pinImage(e.id), { pixelRatio: 2 }); });
-    map.on("click", "pins", (e) => { const id = e.features?.[0]?.properties?.id; if (id) pickRef.current(String(id)); });
-    // dupla koppintás a címre ne nagyítson (a második koppintás a listához visz)
-    map.on("dblclick", "pins", (e) => e.preventDefault());
-    map.on("mouseenter", "pins", () => { map.getCanvas().style.cursor = "pointer"; });
-    map.on("mouseleave", "pins", () => { map.getCanvas().style.cursor = ""; });
-    map.on("zoomend", (e) => { if ((e as { originalEvent?: unknown }).originalEvent) zoomRef.current = map.getZoom(); });
-    const el = document.createElement("div");
-    el.className = "me-arrow";
-    el.innerHTML = DOT;
-    meEl.current = el;
-    meMarker.current = new maplibregl.Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" });
-    const ro = new ResizeObserver(() => map.resize());
-    ro.observe(box.current);
-    return () => { ro.disconnect(); cancelAnimationFrame(anim.current); map.remove(); mapRef.current = null; setReady(false); };
-  }, []);
+  const { map, ready, meMarker, meElement } = useMapInstance(container, pickRef, setFree, userZoom);
 
-  // --- címek jelölői (csak akkor frissül, ha tényleg változott valami) ---
-  const pinData = pins.map((p) => `${p.id}|${p.cls}|${p.t ?? p.n}|${p.lat},${p.lon}`).join(";");
-  useEffect(() => {
-    const src = ready ? (mapRef.current?.getSource("pins") as maplibregl.GeoJSONSource | undefined) : undefined;
-    if (!src) return;
-    src.setData({ type: "FeatureCollection", features: pins.map((p) => ({
-      type: "Feature", properties: { id: p.id, n: p.n, icon: `pin|${p.cls}|${p.t ?? p.n}` },
-      geometry: { type: "Point", coordinates: [p.lon, p.lat] } })) });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, pinData]);
-
-  // --- igazítás a címekre / útvonalra (csak ha nem követjük a helyzetet) ---
-  const fit = (pts: [number, number][]) => {
-    const map = mapRef.current; if (!map || !pts.length) return;
-    const b = new maplibregl.LngLatBounds();
-    pts.forEach(([la, lo]) => b.extend([lo, la]));
-    map.fitBounds(b, { padding: 40, maxZoom: 17, duration: 600, bearing: 0, pitch: 0 });
-  };
-  const pinKey = pins.map((p) => `${p.lat},${p.lon}`).join(";");
-  // amíg egy listából kiválasztott címet mutatunk, a térkép ne ugorjon el automatikusan
-  const focusOn = !!focus;
-  useEffect(() => { if (!track && !focusOn && pins.length) fit(pins.map((p) => [p.lat, p.lon])); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinKey]);
-  useEffect(() => { if (!track && !focusOn && line?.length) fit(line); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [line]);
-
-  // --- a listában kiválasztott cím: odarepülés, lüktető jelölés és felirat ---
-  const focusMk = useRef<maplibregl.Marker | null>(null);
-  const focusPop = useRef<maplibregl.Popup | null>(null);
-  useEffect(() => {
-    const map = mapRef.current;
-    focusMk.current?.remove(); focusPop.current?.remove();
-    focusMk.current = null; focusPop.current = null;
-    if (!map || !ready || !focus) return;
-    if (follow || drive) setFree(true); // követés közben is odaugrik; a „Középre” gombbal vissza
-    map.flyTo({ center: [focus.lon, focus.lat], zoom: Math.max(map.getZoom(), 17), bearing: 0, pitch: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 900, essential: true });
-    // a külső elemet a MapLibre mozgatja (transform), ezért a lüktetés egy belső elemen fut
-    const el = document.createElement("div");
-    el.style.pointerEvents = "none";
-    el.appendChild(document.createElement("div")).className = "focus-ring";
-    focusMk.current = new maplibregl.Marker({ element: el }).setLngLat([focus.lon, focus.lat]).addTo(map);
-    const lab = document.createElement("div");
-    lab.className = "focus-lab";
-    lab.textContent = focus.label;
-    focusPop.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 22, anchor: "bottom", className: "focus-pop" })
-      .setLngLat([focus.lon, focus.lat]).setDOMContent(lab).addTo(map);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus?.k, ready]);
-
-  // --- kis ablak (tooltip) a rábökött címhez: név + leadandó újságok ---
-  const infoPop = useRef<maplibregl.Popup | null>(null);
-  const infoCloseRef = useRef(onInfoClose); infoCloseRef.current = onInfoClose;
-  const infoKey = info ? JSON.stringify(info) : "";
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready || !info) { infoPop.current?.remove(); infoPop.current = null; return; }
-    const box = document.createElement("div");
-    box.className = "pin-info";
-    const h = box.appendChild(document.createElement("b")); h.textContent = info.title;
-    if (info.sub) { const n = box.appendChild(document.createElement("div")); n.className = "pi-sub"; n.textContent = info.sub; }
-    if (info.note) { const n = box.appendChild(document.createElement("div")); n.className = "pi-note"; n.textContent = "⚠ " + info.note; }
-    const ul = box.appendChild(document.createElement("div")); ul.className = "pi-pap";
-    for (const p of info.papers) {
-      const c = ul.appendChild(document.createElement("span"));
-      c.className = `pi-chip ${p.st ?? "todo"}`;
-      c.textContent = p.st ? `${p.name} · ${ST_LABEL[p.st] ?? p.st}` : p.name;
-    }
-    const go = box.appendChild(document.createElement("button"));
-    go.className = "pi-go"; go.textContent = "Ugrás a címhez a listában ›";
-    go.onclick = () => pickRef.current(info.id);
-    const hint = box.appendChild(document.createElement("div")); hint.className = "pi-hint"; hint.textContent = "(vagy koppints még egyszer a címre)";
-    if (!infoPop.current) {
-      infoPop.current = new maplibregl.Popup({ closeButton: true, closeOnClick: false, offset: 18, maxWidth: "260px", className: "pin-pop", anchor: "bottom" });
-      infoPop.current.on("close", () => { infoPop.current = null; infoCloseRef.current?.(); });
-    }
-    infoPop.current.setLngLat([info.lon, info.lat]).setDOMContent(box);
-    if (!infoPop.current.isOpen()) {
-      infoPop.current.addTo(map);
-      // a címet a térkép alsó részére toljuk, hogy a fölötte nyíló ablak ne lógjon le a kis térképről
-      // (kis késleltetéssel, hogy egy gyors dupla koppintás második fele még a címet érje)
-      const pop = infoPop.current;
-      if (!track) setTimeout(() => {
-        if (infoPop.current !== pop || !pop.isOpen()) return;
-        const H = map.getContainer().clientHeight;
-        map.easeTo({ center: [info.lon, info.lat], offset: [0, Math.round(H * 0.3)], duration: 400 });
-      }, 450);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [infoKey, ready]);
-  // a térkép üres részére kattintva bezárul
-  useEffect(() => {
-    const map = mapRef.current; if (!map || !ready) return;
-    const off = (e: maplibregl.MapMouseEvent) => {
-      if (!map.queryRenderedFeatures(e.point, { layers: ["pins"] }).length) infoPop.current?.remove();
-    };
-    map.on("click", off);
-    return () => { map.off("click", off); };
-  }, [ready]);
-
-  // --- útvonal (navigáció közben csak a hátralévő rész) ---
-  useEffect(() => {
-    const src = ready ? (mapRef.current?.getSource("route") as maplibregl.GeoJSONSource | undefined) : undefined;
-    if (!src) return;
-    const pts = line ?? [];
-    src.setData(lineFC(cut ? [cut.pt, ...pts.slice(cut.i + 1)] : pts));
-  }, [ready, line, cut]);
-
-  // --- saját helyzet: nyíl + pontossági kör, sima mozgatás ---
-  // Csak számokra figyelünk (nem az objektumra), így a felesleges újrarajzolások elmaradnak.
-  const lat = me?.lat ?? null, lon = me?.lon ?? null, acc = me?.acc ?? 0;
-  useEffect(() => {
-    const el = meEl.current, mk = meMarker.current;
-    if (!el || !mk) return;
-    const kind = heading == null ? "dot" : "arrow";
-    if (el.dataset.kind !== kind) { el.dataset.kind = kind; el.innerHTML = kind === "dot" ? DOT : ARROW; }
-    if (heading != null) mk.setRotation(heading);
-  }, [heading]);
-  useEffect(() => {
-    const map = mapRef.current, mk = meMarker.current;
-    if (!map || !mk) return;
-    if (lat == null || lon == null) { mk.remove(); shown.current = null; return; }
-    if (!shown.current) { shown.current = { lat, lon }; mk.setLngLat([lon, lat]).addTo(map); }
-    const from = shown.current, to = { lat, lon }, t0 = performance.now(), D = 900;
-    cancelAnimationFrame(anim.current);
-    const step = (t: number) => {
-      const k = Math.min(1, (t - t0) / D);
-      const p = { lat: from.lat + (to.lat - from.lat) * k, lon: from.lon + (to.lon - from.lon) * k };
-      shown.current = p; mk.setLngLat([p.lon, p.lat]);
-      if (k < 1) anim.current = requestAnimationFrame(step);
-    };
-    anim.current = requestAnimationFrame(step);
-  }, [lat, lon]);
-  useEffect(() => {
-    const src = ready ? (mapRef.current?.getSource("acc") as maplibregl.GeoJSONSource | undefined) : undefined;
-    src?.setData(lat != null && lon != null && acc > 8 && !drive ? circle({ lat, lon }, acc) : EMPTY);
-  }, [lat, lon, acc, ready, drive]);
-
-  // --- kamera követés ---
-  // Csak akkor mozdítjuk a kamerát, ha legalább 1 métert mentünk vagy 3 fokot fordultunk:
-  // az iránytű apró rezgései ne indítsanak folyamatos újrarajzolást.
-  const lastCam = useRef<{ lat: number; lon: number; h: number | null; mode: string } | null>(null);
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !track || lat == null || lon == null) { lastCam.current = null; return; }
-    const mode = `${drive}|${zoomRef.current}`, L = lastCam.current;
-    const moved = L ? Math.hypot((lat - L.lat) * 110540, (lon - L.lon) * 111320 * Math.cos((lat * Math.PI) / 180)) : Infinity;
-    const turned = L && heading != null && L.h != null ? Math.abs(((heading - L.h + 540) % 360) - 180) : Infinity;
-    if (L && L.mode === mode && moved < 1 && (!drive || turned < 3)) return;
-    lastCam.current = { lat, lon, h: heading, mode };
-    const h = map.getContainer().clientHeight;
-    const z = zoomRef.current ?? (drive ? 17.5 : 16.5);
-    map.easeTo({
-      center: [lon, lat],
-      zoom: z,
-      bearing: drive ? (heading ?? map.getBearing()) : 0,
-      pitch: drive ? 50 : 0,
-      padding: drive ? { top: Math.round(h * 0.45), bottom: 0, left: 0, right: 0 } : { top: 0, bottom: 0, left: 0, right: 0 },
-      duration: 900, easing: (t) => t, essential: true,
-    });
-  }, [lat, lon, heading, track, drive]);
+  usePins(map, ready, pins);
+  useAutoFit(map, pins, line, !track && !focus);
+  useRouteLine(map, ready, line, cut);
+  useFocus(map, ready, focus, () => (follow || drive) && setFree(true));
+  useInfoPopup(map, ready, info, track, pickRef, closeInfoRef);
+  useMeMarker(map, ready, meMarker, meElement, me, heading, drive);
+  useCamera(map, me, heading, track, drive, userZoom);
 
   // nézetváltáskor alapértelmezett nagyítás; vezetés nézetből kilépve vissza északra és laposra
   useEffect(() => {
-    zoomRef.current = null;
-    const map = mapRef.current;
-    if (!drive && map) map.easeTo({ bearing: 0, pitch: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 600 });
-  }, [drive]);
-  useEffect(() => { if (!follow && !drive) setFree(false); }, [follow, drive]);
-  useEffect(() => { mapRef.current?.resize(); }, [full]);
+    userZoom.current = null;
+    if (!drive) map.current?.easeTo({ bearing: 0, pitch: 0, padding: NO_PADDING, duration: 600 });
+  }, [drive, map]);
+  useEffect(() => {
+    if (!follow && !drive) setFree(false);
+  }, [follow, drive]);
+  useEffect(() => {
+    map.current?.resize();
+  }, [full, map]);
 
   return (
     <div className={`mapbox${full ? " full" : ""}`}>
-      <div ref={box} style={{ position: "absolute", inset: 0 }} />
+      <div ref={container} style={{ position: "absolute", inset: 0 }} />
       {(follow || drive) && free && me && (
-        <button className="recenter" onClick={() => { setFree(false); zoomRef.current = null; }}>◎ Középre</button>
+        <button
+          className="recenter"
+          onClick={() => {
+            setFree(false);
+            userZoom.current = null;
+          }}
+        >
+          ◎ Középre
+        </button>
       )}
     </div>
   );
+}
+
+// ——— A térkép létrehozása ———
+
+function useMapInstance(
+  container: React.RefObject<HTMLDivElement | null>,
+  pickRef: MutableRefObject<(id: string) => void>,
+  setFree: (v: boolean) => void,
+  userZoom: MutableRefObject<number | null>,
+) {
+  const map = useRef<maplibregl.Map | null>(null);
+  const meMarker = useRef<maplibregl.Marker | null>(null);
+  const meElement = useRef<HTMLDivElement | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!container.current) return;
+    const m = new maplibregl.Map({
+      container: container.current,
+      style: MAP_STYLE,
+      center: KISKUNHALAS,
+      zoom: 14,
+      maxPitch: 60,
+      attributionControl: { compact: true },
+      // telefonon a 3-szoros felbontás sokszor annyi rajzolást jelent, a 2-szeres is éles
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      fadeDuration: 0,
+    });
+    map.current = m;
+    // a végponttól végpontig tartó tesztek innen tudják, hol van egy cím a képernyőn
+    if (process.env.NODE_ENV !== "production") (window as unknown as { __map?: maplibregl.Map }).__map = m;
+
+    m.on("load", () => {
+      addLayers(m);
+      setReady(true);
+    });
+    m.on("styleimagemissing", (e) => {
+      if (isPinImageId(e.id) && !m.hasImage(e.id))
+        m.addImage(e.id, drawPinImage(e.id), { pixelRatio: PIN_PIXEL_RATIO });
+    });
+    m.on("click", PIN_LAYER, (e) => {
+      const id = e.features?.[0]?.properties?.id;
+      if (id) pickRef.current(String(id));
+    });
+    // dupla koppintás a címre ne nagyítson (a második koppintás a listához visz)
+    m.on("dblclick", PIN_LAYER, (e) => e.preventDefault());
+    m.on("mouseenter", PIN_LAYER, () => (m.getCanvas().style.cursor = "pointer"));
+    m.on("mouseleave", PIN_LAYER, () => (m.getCanvas().style.cursor = ""));
+    m.on("dragstart", (e) => e.originalEvent && setFree(true));
+    m.on("zoomend", (e) => {
+      if ((e as { originalEvent?: unknown }).originalEvent) userZoom.current = m.getZoom();
+    });
+
+    const el = createMeElement();
+    meElement.current = el;
+    meMarker.current = new maplibregl.Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" });
+
+    const resize = new ResizeObserver(() => m.resize());
+    resize.observe(container.current);
+    return () => {
+      resize.disconnect();
+      m.remove();
+      map.current = null;
+      setReady(false);
+    };
+  }, [container, pickRef, setFree, userZoom]);
+
+  return { map, ready, meMarker, meElement };
+}
+
+// ——— Címjelölők ———
+
+function usePins(map: MutableRefObject<maplibregl.Map | null>, ready: boolean, pins: Pin[]) {
+  // csak akkor frissül, ha tényleg változott valami
+  const key = pins.map((p) => `${pinImageId(p)}|${p.id}|${p.lat},${p.lon}`).join(";");
+  useEffect(() => {
+    if (!ready) return;
+    source(map.current, SOURCE.pins)?.setData({
+      type: "FeatureCollection",
+      features: pins.map((p) => ({
+        type: "Feature",
+        properties: { id: p.id, n: p.n, icon: pinImageId(p) },
+        geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+      })),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a `key` pontosan leírja a változást
+  }, [ready, key]);
+}
+
+/** Igazítás a címekre / útvonalra – csak ha nem követjük a helyzetet és nincs kiemelt cím. */
+function useAutoFit(
+  map: MutableRefObject<maplibregl.Map | null>,
+  pins: Pin[],
+  line: [number, number][] | null,
+  enabled: boolean,
+) {
+  const fit = (pts: [number, number][]) => {
+    if (!map.current || !pts.length) return;
+    const bounds = new maplibregl.LngLatBounds();
+    pts.forEach(([la, lo]) => bounds.extend([lo, la]));
+    map.current.fitBounds(bounds, { padding: 40, maxZoom: 17, duration: 600, bearing: 0, pitch: 0 });
+  };
+  const pinKey = pins.map((p) => `${p.lat},${p.lon}`).join(";");
+  useEffect(() => {
+    if (enabled && pins.length) fit(pins.map((p) => [p.lat, p.lon]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- csak a pontok változásakor
+  }, [pinKey]);
+  useEffect(() => {
+    if (enabled && line?.length) fit(line);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- csak új útvonalnál
+  }, [line]);
+}
+
+// ——— Útvonal ———
+
+function useRouteLine(
+  map: MutableRefObject<maplibregl.Map | null>,
+  ready: boolean,
+  line: [number, number][] | null,
+  cut: Props["cut"],
+) {
+  useEffect(() => {
+    if (!ready) return;
+    const pts = line ?? [];
+    // navigáció közben csak a hátralévő rész
+    source(map.current, SOURCE.route)?.setData(lineFeature(cut ? [cut.pt, ...pts.slice(cut.i + 1)] : pts));
+  }, [map, ready, line, cut]);
+}
+
+// ——— Kiemelt cím (a listából) ———
+
+function useFocus(
+  map: MutableRefObject<maplibregl.Map | null>,
+  ready: boolean,
+  focus: MapFocus | null | undefined,
+  onFocus: () => void,
+) {
+  const marker = useRef<maplibregl.Marker | null>(null);
+  const label = useRef<maplibregl.Popup | null>(null);
+  useEffect(() => {
+    marker.current?.remove();
+    label.current?.remove();
+    marker.current = label.current = null;
+    const m = map.current;
+    if (!m || !ready || !focus) return;
+    onFocus(); // követés közben is odaugrik; a „Középre” gombbal vissza
+    const at: [number, number] = [focus.lon, focus.lat];
+    m.flyTo({ center: at, zoom: Math.max(m.getZoom(), 17), bearing: 0, pitch: 0, padding: NO_PADDING, duration: 900 });
+    marker.current = new maplibregl.Marker({ element: createFocusRing() }).setLngLat(at).addTo(m);
+    label.current = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 22,
+      anchor: "bottom",
+      className: "focus-pop",
+    })
+      .setLngLat(at)
+      .setDOMContent(createFocusLabel(focus.label))
+      .addTo(m);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- új kiemelésnél (k) fut
+  }, [focus?.k, ready]);
+}
+
+// ——— Címablak (egy koppintás a címre) ———
+
+function useInfoPopup(
+  map: MutableRefObject<maplibregl.Map | null>,
+  ready: boolean,
+  info: PinInfo | null | undefined,
+  tracking: boolean,
+  pickRef: MutableRefObject<(id: string) => void>,
+  closeRef: MutableRefObject<(() => void) | undefined>,
+) {
+  const popup = useRef<maplibregl.Popup | null>(null);
+  const key = info ? JSON.stringify(info) : "";
+
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready || !info) {
+      popup.current?.remove();
+      popup.current = null;
+      return;
+    }
+    if (!popup.current) {
+      popup.current = new maplibregl.Popup({
+        closeButton: true,
+        closeOnClick: false,
+        offset: 18,
+        maxWidth: "260px",
+        className: "pin-pop",
+        anchor: "bottom",
+      });
+      popup.current.on("close", () => {
+        popup.current = null;
+        closeRef.current?.();
+      });
+    }
+    const p = popup.current;
+    p.setLngLat([info.lon, info.lat]).setDOMContent(createInfoContent(info, () => pickRef.current(info.id)));
+    if (p.isOpen()) return;
+    p.addTo(m);
+    // A címet a térkép alsó részére toljuk, hogy a fölötte nyíló ablak ne lógjon le a kis térképről.
+    // Kis késleltetéssel, hogy egy gyors dupla koppintás második fele még a címet érje.
+    if (!tracking) {
+      setTimeout(() => {
+        if (popup.current !== p || !p.isOpen()) return;
+        const offsetY = Math.round(m.getContainer().clientHeight * 0.3);
+        m.easeTo({ center: [info.lon, info.lat], offset: [0, offsetY], duration: 400 });
+      }, 450);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a `key` pontosan leírja a változást
+  }, [key, ready]);
+
+  // a térkép üres részére kattintva bezárul
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready) return;
+    const closeOnEmpty = (e: maplibregl.MapMouseEvent) => {
+      if (!m.queryRenderedFeatures(e.point, { layers: [PIN_LAYER] }).length) popup.current?.remove();
+    };
+    m.on("click", closeOnEmpty);
+    return () => {
+      m.off("click", closeOnEmpty);
+    };
+  }, [map, ready]);
+}
+
+// ——— Saját helyzet ———
+
+const GLIDE_MS = 900;
+
+function useMeMarker(
+  map: MutableRefObject<maplibregl.Map | null>,
+  ready: boolean,
+  marker: MutableRefObject<maplibregl.Marker | null>,
+  element: MutableRefObject<HTMLDivElement | null>,
+  me: Props["me"],
+  heading: number | null,
+  drive: boolean,
+) {
+  const shown = useRef<LatLon | null>(null); // a nyíl éppen kirajzolt helye (animációhoz)
+  const frame = useRef(0);
+  // Csak számokra figyelünk (nem az objektumra), így a felesleges újrarajzolások elmaradnak.
+  const lat = me?.lat ?? null;
+  const lon = me?.lon ?? null;
+  const acc = me?.acc ?? 0;
+
+  useEffect(() => {
+    if (!element.current || !marker.current) return;
+    setMeShape(element.current, heading != null);
+    if (heading != null) marker.current.setRotation(heading);
+  }, [element, marker, heading]);
+
+  // sima csúszás az új helyre
+  useEffect(() => {
+    const m = map.current;
+    const mk = marker.current;
+    if (!m || !mk) return;
+    if (lat == null || lon == null) {
+      mk.remove();
+      shown.current = null;
+      return;
+    }
+    if (!shown.current) {
+      shown.current = { lat, lon };
+      mk.setLngLat([lon, lat]).addTo(m);
+    }
+    const from = shown.current;
+    const start = performance.now();
+    cancelAnimationFrame(frame.current);
+    const step = (t: number) => {
+      const k = Math.min(1, (t - start) / GLIDE_MS);
+      const p = { lat: from.lat + (lat - from.lat) * k, lon: from.lon + (lon - from.lon) * k };
+      shown.current = p;
+      mk.setLngLat([p.lon, p.lat]);
+      if (k < 1) frame.current = requestAnimationFrame(step);
+    };
+    frame.current = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame.current);
+  }, [map, marker, lat, lon]);
+
+  // pontossági kör
+  useEffect(() => {
+    if (!ready) return;
+    const show = lat != null && lon != null && acc > 8 && !drive;
+    source(map.current, SOURCE.accuracy)?.setData(show ? accuracyFeature({ lat, lon }, acc) : EMPTY);
+  }, [map, ready, lat, lon, acc, drive]);
+}
+
+// ——— Kamera követés ———
+
+function useCamera(
+  map: MutableRefObject<maplibregl.Map | null>,
+  me: Props["me"],
+  heading: number | null,
+  track: boolean,
+  drive: boolean,
+  userZoom: MutableRefObject<number | null>,
+) {
+  const last = useRef<{ lat: number; lon: number; h: number | null; mode: string } | null>(null);
+  const lat = me?.lat ?? null;
+  const lon = me?.lon ?? null;
+
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !track || lat == null || lon == null) {
+      last.current = null;
+      return;
+    }
+    // Csak akkor mozdítjuk a kamerát, ha legalább 1 métert mentünk vagy 3 fokot fordultunk:
+    // az iránytű apró rezgései ne indítsanak folyamatos újrarajzolást.
+    const mode = `${drive}|${userZoom.current}`;
+    const prev = last.current;
+    if (prev && prev.mode === mode) {
+      const k = metersPerDegree(lat);
+      const moved = Math.hypot((lat - prev.lat) * k.y, (lon - prev.lon) * k.x);
+      const turned = heading != null && prev.h != null ? angleDiff(heading, prev.h) : Infinity;
+      if (moved < 1 && (!drive || turned < 3)) return;
+    }
+    last.current = { lat, lon, h: heading, mode };
+    const height = m.getContainer().clientHeight;
+    m.easeTo({
+      center: [lon, lat],
+      zoom: userZoom.current ?? (drive ? DRIVE_ZOOM : FOLLOW_ZOOM),
+      bearing: drive ? (heading ?? m.getBearing()) : 0,
+      pitch: drive ? DRIVE_PITCH : 0,
+      padding: drive ? { ...NO_PADDING, top: Math.round(height * 0.45) } : NO_PADDING,
+      duration: CAMERA_MS,
+      easing: (t) => t,
+      essential: true,
+    });
+  }, [map, lat, lon, heading, track, drive, userZoom]);
 }

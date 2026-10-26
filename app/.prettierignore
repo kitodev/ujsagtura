@@ -1,0 +1,8 @@
+.next
+node_modules
+package-lock.json
+db/seed.sql
+playwright-report
+test-results
+tsconfig.tsbuildinfo
+next-env.d.ts

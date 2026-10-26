@@ -1,108 +1,31 @@
 import { db } from "@/lib/db";
-import { HIDDEN_ROUTES } from "@/lib/hidden";
-import { splitPapers, ensurePapers } from "@/lib/papers";
-import { findAddress, addPapers } from "@/lib/dupe";
+import { handle, HttpError, param } from "@/lib/server/http";
+import { createStop, deleteStop, listStops, saveLocations, saveOrder, updateStop } from "@/lib/server/stops";
+
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
-  const u = new URL(req.url);
-  const route = u.searchParams.get("route"), day = u.searchParams.get("day");
-  const sql = db();
-  await ensurePapers(sql); // duplikátumok törlése + régi „PE + SPORT” tételek szétbontása (egyszer)
-  const stops = await sql`
-    select s.id, s.route_id, s.position, s.address, s.name, s.note, s.lat, s.lon,
-      coalesce(json_agg(json_build_object('id', p.id, 'paper', p.paper) order by p.ord) filter (where p.id is not null), '[]') as stop_papers
-    from stops s left join stop_papers p on p.stop_id = s.id
-    where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[]) group by s.id order by s.route_id, s.position`;
-  // Az aznapi jelölés; ha aznapra nincs, a „Lemondva” egy korábbi napról öröklődik, amíg át nem állítják
-  // (a „none” sor jelzi, hogy egy adott naptól a lemondás megszűnt).
-  const del = (await sql`
-    select p.id as stop_paper_id,
-      case when d.day = ${day}::date then nullif(d.status, 'none') when d.status = 'cancelled' then 'cancelled' end as status,
-      case when d.day < ${day}::date and d.status = 'cancelled' then to_char(d.day, 'YYYY-MM-DD') end as since
-    from stop_papers p join stops s on s.id = p.stop_id
-    join lateral (select x.status, x.day from deliveries x where x.stop_paper_id = p.id and x.day <= ${day}::date order by x.day desc limit 1) d on true
-    where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[])`) as { stop_paper_id: string; status: string | null; since: string | null }[];
-  const live = del.filter((x) => x.status);
-  return Response.json({
-    stops,
-    deliveries: Object.fromEntries(live.map((x) => [x.stop_paper_id, x.status])),
-    since: Object.fromEntries(live.filter((x) => x.since).map((x) => [x.stop_paper_id, x.since])), // örökölt lemondás kezdete
-  });
-}
-export async function POST(req: Request) {
-  const { route_id, address, name, note, papers: raw, lat, lon, merge } = await req.json();
-  const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
-  if (!route_id || !String(address ?? "").trim()) return Response.json({ error: "Hiányzó túra vagy cím." }, { status: 400 });
-  const sql = db();
-  await ensurePapers(sql);
-  // Egy cím csak egyszer szerepelhet: ha már megvan, az új újságok csak hozzáadhatók (merge: true)
-  const match = await findAddress(sql, address);
-  if (match) {
-    if (!merge) return Response.json({ error: "Erre a címre már viszel ki újságot.", match }, { status: 409 });
-    const added = await addPapers(sql, match.id, papers);
-    if (note && String(note).trim()) await sql`update stops set note = case when note = '' then ${note} when position(${note} in note) > 0 then note else note || ' · ' || ${note} end where id = ${match.id}::uuid`;
-    if (name && String(name).trim()) await sql`update stops set name = ${name} where id = ${match.id}::uuid and name = ''`;
-    return Response.json({ ok: true, merged: true, match, added });
-  }
-  const [{ id }] = await sql`
-    insert into stops(route_id, position, address, name, note, lat, lon)
-    values (${route_id}, coalesce((select max(position) from stops where route_id = ${route_id}), 0) + 1, ${address}, ${name ?? ""}, ${note ?? ""}, ${lat ?? null}::float8, ${lon ?? null}::float8)
-    returning id`;
-  await sql`insert into stop_papers(stop_id, paper) select ${id}::uuid, unnest(${papers}::text[]) on conflict do nothing`;
-  return Response.json({ ok: true });
-}
+// Címek: listázás (?route=&day=), felvétel, módosítás / törlés (?id=), koordináták és sorrend mentése.
 
-// Módosítás / törlés: az azonosító a ?id=... paraméterben érkezik (nincs külön [id] mappa)
-const idOf = (req: Request) => new URL(req.url).searchParams.get("id");
+export const GET = handle(async (req: Request) =>
+  listStops(db(), param(req, "route") ?? "all", param(req, "day") ?? new Date().toLocaleDateString("sv-SE")),
+);
 
-export async function PATCH(req: Request) {
+export const POST = handle(async (req: Request) => createStop(db(), await req.json()));
+
+export const PUT = handle(async (req: Request) => updateStop(db(), requireId(req), await req.json()));
+
+export const DELETE = handle(async (req: Request) => deleteStop(db(), requireId(req)));
+
+export const PATCH = handle(async (req: Request) => {
   const body = await req.json();
   const sql = db();
-  if (Array.isArray(body.order)) {
-    const order = body.order as string[];
-    if (order.length) {
-      await sql`update stops s set position = v.position::int
-        from unnest(${order}::uuid[]) with ordinality as v(id, position)
-        where s.id = v.id`;
-    }
-  } else if (Array.isArray(body.items)) {
-    // több cím koordinátájának egyszerre történő mentése
-    const items = body.items as { id: string; lat: number; lon: number }[];
-    await sql`update stops s set lat = v.lat, lon = v.lon
-      from (select unnest(${items.map((x) => x.id)}::uuid[]) as id, unnest(${items.map((x) => x.lat)}::float8[]) as lat, unnest(${items.map((x) => x.lon)}::float8[]) as lon) v
-      where s.id = v.id`;
-  } else {
-    await sql`update stops set lat = ${body.lat}, lon = ${body.lon} where id = ${idOf(req)}::uuid`;
-  }
-  return Response.json({ ok: true });
-}
+  if (Array.isArray(body.order)) return saveOrder(sql, body.order);
+  if (Array.isArray(body.items)) return saveLocations(sql, body.items);
+  return saveLocations(sql, [{ id: requireId(req), lat: body.lat, lon: body.lon }]);
+});
 
-export async function PUT(req: Request) {
-  const id = idOf(req);
-  const { address, name, note, papers: raw, lat, lon } = await req.json();
-  const papers = splitPapers(raw).length ? splitPapers(raw) : ["Újság"];
-  const sql = db();
-  await ensurePapers(sql);
-  const clash = await findAddress(sql, address, id);
-  if (clash) return Response.json({ error: `Ez a cím már szerepel (${clash.route_id}. túra: ${clash.address}). Egy cím csak egyszer szerepelhet.`, match: clash }, { status: 409 });
-  // cím változásakor a régi koordináta érvénytelen
-  await sql`update stops set
-      lat = case when ${lat ?? null}::float8 is not null then ${lat ?? null}::float8 when address = ${address} then lat else null end,
-      lon = case when ${lon ?? null}::float8 is not null then ${lon ?? null}::float8 when address = ${address} then lon else null end,
-      address = ${address}, name = ${name ?? ""}, note = ${note ?? ""}
-    where id = ${id}::uuid`;
-  await sql`delete from stop_papers where stop_id = ${id}::uuid and lower(btrim(paper)) <> all(${papers.map((p: string) => p.toLowerCase())}::text[])`;
-  await sql`insert into stop_papers(stop_id, paper)
-    select ${id}::uuid, x from unnest(${papers}::text[]) as x
-    where lower(btrim(x)) not in (select lower(btrim(paper)) from stop_papers where stop_id = ${id}::uuid)
-    on conflict do nothing`;
-  return Response.json({ ok: true });
-}
-
-export async function DELETE(req: Request) {
-  const id = idOf(req);
-  const sql = db();
-  await sql`delete from stops where id = ${id}::uuid`;
-  return Response.json({ ok: true });
+function requireId(req: Request): string {
+  const id = param(req, "id");
+  if (!id) throw new HttpError(400, "Hiányzó azonosító.");
+  return id;
 }
