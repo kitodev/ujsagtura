@@ -35,7 +35,7 @@ header {
   position: sticky;
   top: 0;
   background: var(--bg);
-  padding: 10px 12px 8px;
+  padding: 8px 12px 6px;
   border-bottom: 1px solid var(--bd);
   z-index: 1000;
 }
@@ -186,8 +186,10 @@ input {
 }
 .mapbox {
   position: relative;
-  height: 38vh;
-  min-height: 220px;
+  /* nagy térkép: telefonon a képernyő nagy része, nagy kijelzőn még magasabb */
+  height: 62vh;
+  height: 62svh;
+  min-height: 320px;
   border-radius: 12px;
   overflow: hidden;
 }
@@ -801,4 +803,141 @@ pre {
 .flt button b {
   display: block;
   font-size: 14px;
+}
+
+/* ——— Tömör fejléc ——— */
+header .tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+header .tabs button {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+}
+.head-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+}
+.head-row .day {
+  margin-top: 0;
+  flex: 1 1 220px;
+}
+.head-row .past {
+  flex-basis: 100%;
+  margin-top: 0;
+}
+.progress {
+  flex: 0 1 140px;
+  min-width: 110px;
+}
+.progress .bar {
+  margin: 0 0 3px;
+  height: 6px;
+}
+.progress .meta {
+  font-size: 12px;
+  white-space: nowrap;
+}
+header .tools {
+  flex-wrap: nowrap;
+  margin-top: 6px;
+}
+header .tools button {
+  flex: 1 1 0;
+  padding: 8px 6px;
+}
+header .tools button.on {
+  background: var(--ac);
+  color: #fff;
+  border-color: var(--ac);
+}
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+.menu {
+  position: absolute;
+  right: 12px;
+  top: calc(100% - 4px);
+  z-index: 2;
+  display: grid;
+  min-width: 240px;
+  background: var(--card);
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px #0004;
+  overflow: hidden;
+}
+.menu button {
+  text-align: left;
+  padding: 12px 14px;
+  border: 0;
+  background: none;
+  color: var(--tx);
+  font: inherit;
+  font-size: 15px;
+}
+.menu button + button {
+  border-top: 1px solid var(--bd);
+}
+.menu button:disabled {
+  opacity: 0.45;
+}
+
+/* ——— A térkép saját gombjai ——— */
+.map-rest {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 3;
+  border: 0;
+  border-radius: 20px;
+  padding: 9px 14px;
+  background: #fff;
+  color: #1d1d1b;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 1px 4px #0005;
+}
+.map-rest.on {
+  background: #1a73e8;
+  color: #fff;
+}
+.mapwrap.full:not(.nonav) .map-rest {
+  display: none;
+}
+.mapwrap + .meta,
+.mapwrap ~ .meta {
+  font-size: 12px;
+}
+@media (min-width: 760px) {
+  .mapbox {
+    height: 72vh;
+  }
+  /* nagy kijelzőn a térkép szélesebb, mint a lista */
+  .mapwrap:not(.full) {
+    width: min(1100px, 100vw - 24px);
+    margin-left: calc(50% - min(550px, 50vw - 12px));
+  }
+  header > * {
+    max-width: 1100px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  header .tools {
+    max-width: 720px;
+  }
+}
+
+/* a térkép a fejléc fölött, a lista szélességéhez igazítva */
+.mapsection {
+  padding: 8px 12px 4px;
+  max-width: 720px;
+  margin: 0 auto;
 }

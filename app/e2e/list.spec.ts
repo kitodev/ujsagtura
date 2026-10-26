@@ -71,6 +71,7 @@ test("keresés minden túrában, ékezet nélkül is", async ({ page }) => {
 
 test("Excel: időszak választása", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "⋯ Több" }).click();
   await page.getByRole("button", { name: "📊 Excel" }).click();
   await page.getByRole("button", { name: "Utolsó 7 nap" }).click();
   await expect(page.getByRole("link", { name: "⬇ Letöltés" })).toHaveAttribute(

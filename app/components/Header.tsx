@@ -1,3 +1,7 @@
+"use client";
+// Felső sáv, tömören (hogy a térképnek több hely jusson): túrák, nap + haladás, és a fő gombok.
+// A ritkábban használt eszközök a „⋯ Több” menüben vannak.
+import { useState } from "react";
 import type { Route } from "@/lib/types";
 import { DayPicker } from "./DayPicker";
 
@@ -12,6 +16,7 @@ type Props = {
   onDay: (day: string) => void;
   showMap: boolean;
   canSort: boolean;
+  mapping: boolean;
   onSummary: () => void;
   onToggleMap: () => void;
   onSort: () => void;
@@ -19,10 +24,25 @@ type Props = {
   onAddRoute: () => void;
   onScan: () => void;
   onExcel: () => void;
+  onLocateStops: () => void;
+  onRelocateStops: () => void;
 };
 
-/** Felső sáv: túrák, haladás, napválasztó, eszközök. */
 export function Header(p: Props) {
+  const [menu, setMenu] = useState(false);
+  /** Menüpont: végrehajtja a műveletet és bezárja a menüt. */
+  const item = (label: string, action: () => void, disabled = false) => (
+    <button
+      disabled={disabled}
+      onClick={() => {
+        setMenu(false);
+        action();
+      }}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <header>
       <div className="tabs">
@@ -32,26 +52,43 @@ export function Header(p: Props) {
           </button>
         ))}
       </div>
-      <div className="bar">
-        <i style={{ width: `${p.total ? (p.done / p.total) * 100 : 0}%` }} />
+
+      <div className="head-row">
+        <DayPicker day={p.day} today={p.today} onChange={p.onDay} />
+        <div className="progress" title="Kezelt újságok">
+          <div className="bar">
+            <i style={{ width: `${p.total ? (p.done / p.total) * 100 : 0}%` }} />
+          </div>
+          <div className="meta">
+            {p.done} / {p.total} újság kezelve
+          </div>
+        </div>
       </div>
-      <div className="meta">
-        {p.done} / {p.total} újság kezelve
-      </div>
-      <DayPicker day={p.day} today={p.today} onChange={p.onDay} />
+
       <div className="tools">
-        <button onClick={p.onSummary}>Összesítő</button>
         <button className={p.showMap ? "on" : ""} onClick={p.onToggleMap}>
-          Térkép
-        </button>
-        <button onClick={p.onSort} disabled={!p.canSort}>
-          Közelség szerinti sorrend
+          🗺 Térkép
         </button>
         <button onClick={p.onAddStop}>+ Cím</button>
-        <button onClick={p.onAddRoute}>+ Túra</button>
-        <button onClick={p.onScan}>📷 Beolvasás</button>
-        <button onClick={p.onExcel}>📊 Excel</button>
+        <button className={menu ? "on" : ""} aria-expanded={menu} onClick={() => setMenu(!menu)}>
+          ⋯ Több
+        </button>
       </div>
+
+      {menu && (
+        <>
+          <div className="menu-backdrop" onClick={() => setMenu(false)} />
+          <div className="menu" role="menu">
+            {item("Összesítő", p.onSummary)}
+            {item("Közelség szerinti sorrend", p.onSort, !p.canSort)}
+            {item(p.mapping ? "Feltérképezés…" : "Címek feltérképezése", p.onLocateStops, p.mapping)}
+            {item("Újraszámolás", p.onRelocateStops, p.mapping)}
+            {item("+ Túra", p.onAddRoute)}
+            {item("📷 Beolvasás", p.onScan)}
+            {item("📊 Excel", p.onExcel)}
+          </div>
+        </>
+      )}
     </header>
   );
 }

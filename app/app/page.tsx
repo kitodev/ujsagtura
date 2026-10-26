@@ -306,8 +306,7 @@ export default function Page() {
     setShowMap(true);
     setTimeout(() => {
       const map = document.querySelector<HTMLElement>(".mapwrap");
-      const header = document.querySelector<HTMLElement>("header")?.offsetHeight ?? 0;
-      const top = map ? map.getBoundingClientRect().top + window.scrollY - header - 8 : 0;
+      const top = map ? map.getBoundingClientRect().top + window.scrollY - 8 : 0;
       window.scrollTo({ top, behavior: "smooth" });
     }, 60);
   }
@@ -408,6 +407,83 @@ export default function Page() {
 
   return (
     <>
+      {/* a térkép a legfelül, utána a fejléc (túrák, nap, gombok) és a lista */}
+      {showMap && (
+        <section className="mapsection">
+          <div className={`mapwrap${full ? " full" : ""}${nav ? "" : " nonav"}`}>
+            <MapView
+              pins={pins}
+              me={navigation.shownPosition}
+              heading={navigation.shownHeading}
+              line={nav?.coords ?? routeLine.line}
+              cut={
+                nav && navigation.onRoute && navigation.snap ? { i: navigation.snap.i, pt: navigation.snap.pt } : null
+              }
+              follow={!!nav}
+              drive={drive}
+              full={full}
+              focus={focus}
+              info={info}
+              onInfoClose={() => setInfoId("")}
+              onPick={onPinPick}
+            />
+            <MapControls
+              full={full}
+              drive={drive}
+              restOnly={restOnly}
+              onToggleRest={() => setRestOnly(!restOnly)}
+              onToggleFull={() => setFull(!full)}
+              onToggleDrive={() => {
+                if (!drive) watch();
+                setDrive(!drive);
+              }}
+              onLocate={watch}
+            />
+            {nav && (
+              <NavPanel
+                nav={nav}
+                stepIndex={navigation.stepIndex}
+                snap={navigation.snap}
+                onRoute={navigation.onRoute}
+                rerouting={navigation.rerouting}
+                gps={gps}
+                target={navTarget(nav.to)}
+                deliveries={deliveries}
+                since={since}
+                voice={voice}
+                onCycle={cyclePaper}
+                onReroute={() => navigation.start(nav.to, true)}
+                onToggleVoice={() => setVoice(!voice)}
+                onStop={stopTour}
+              />
+            )}
+          </div>
+
+          <div className="meta" style={{ marginTop: 6 }}>
+            {locatedCount} / {allStops.length} cím helye ismert
+            {locatedCount < allStops.length
+              ? ` · ${allStops.length - locatedCount} hely keresése folyamatban vagy sikertelen`
+              : " · minden túra"}
+            {hideDone ? ` · a már elintézett címek el vannak rejtve (${pins.length} látható)` : ""}
+          </div>
+          {routeLine.message && (
+            <div className="meta" style={{ marginTop: 6 }}>
+              {routeLine.message}
+            </div>
+          )}
+          {message && <div className="meta">{message}</div>}
+          {next && !nav && (
+            <div className="nxb">
+              Következő: <b>{next.stop.address}</b>
+              {next.distance != null && ` (${Math.round(next.distance)} m)`} ·{" "}
+              <button className="all on-dark" onClick={() => startTour(next.stop)}>
+                Navigálás
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
       <Header
         routes={routes}
         route={route}
@@ -419,6 +495,14 @@ export default function Page() {
         onDay={setDay}
         showMap={showMap}
         canSort={stops.length > 0}
+        mapping={mapping}
+        onLocateStops={() => {
+          setShowMap(true);
+          mapAndSort();
+        }}
+        onRelocateStops={() =>
+          confirm("A túra minden címének helyét újraszámolja, a kézzel javítottakat is. Folytatod?") && mapAndSort(true)
+        }
         onSummary={() => setSummary(summaryText(stops, deliveries, day, route))}
         onToggleMap={() => setShowMap(!showMap)}
         onSort={() => sortByProximity()}
@@ -436,99 +520,6 @@ export default function Page() {
           onChange={(e) => setQuery(e.target.value)}
         />
         {!query.trim() && <FilterBar value={filter} counts={counts} total={papers.length} onChange={setFilter} />}
-
-        {showMap && (
-          <>
-            <div className={`mapwrap${full ? " full" : ""}${nav ? "" : " nonav"}`}>
-              <MapView
-                pins={pins}
-                me={navigation.shownPosition}
-                heading={navigation.shownHeading}
-                line={nav?.coords ?? routeLine.line}
-                cut={
-                  nav && navigation.onRoute && navigation.snap ? { i: navigation.snap.i, pt: navigation.snap.pt } : null
-                }
-                follow={!!nav}
-                drive={drive}
-                full={full}
-                focus={focus}
-                info={info}
-                onInfoClose={() => setInfoId("")}
-                onPick={onPinPick}
-              />
-              <MapControls
-                full={full}
-                drive={drive}
-                hasGps={!!gps}
-                onToggleFull={() => setFull(!full)}
-                onToggleDrive={() => {
-                  if (!drive) watch();
-                  setDrive(!drive);
-                }}
-                onLocate={watch}
-              />
-              {nav && (
-                <NavPanel
-                  nav={nav}
-                  stepIndex={navigation.stepIndex}
-                  snap={navigation.snap}
-                  onRoute={navigation.onRoute}
-                  rerouting={navigation.rerouting}
-                  gps={gps}
-                  target={navTarget(nav.to)}
-                  deliveries={deliveries}
-                  since={since}
-                  voice={voice}
-                  onCycle={cyclePaper}
-                  onReroute={() => navigation.start(nav.to, true)}
-                  onToggleVoice={() => setVoice(!voice)}
-                  onStop={stopTour}
-                />
-              )}
-            </div>
-
-            <div className="meta" style={{ marginTop: 6 }}>
-              {locatedCount} / {allStops.length} cím helye ismert
-              {locatedCount < allStops.length
-                ? ` · ${allStops.length - locatedCount} hely keresése folyamatban vagy sikertelen`
-                : " · minden túra"}
-              {hideDone ? ` · a már elintézett címek el vannak rejtve (${pins.length} látható)` : ""}
-            </div>
-            {routeLine.message && (
-              <div className="meta" style={{ marginTop: 6 }}>
-                {routeLine.message}
-              </div>
-            )}
-            <div className="mt" style={{ margin: "8px 0" }}>
-              <button disabled={mapping} onClick={() => mapAndSort()}>
-                {mapping ? "Feltérképezés…" : "Címek feltérképezése"}
-              </button>
-              <button
-                disabled={mapping}
-                onClick={() =>
-                  confirm("A túra minden címének helyét újraszámolja, a kézzel javítottakat is. Folytatod?") &&
-                  mapAndSort(true)
-                }
-              >
-                Újraszámolás
-              </button>
-              <button onClick={watch}>Saját helyzet</button>
-              <button className={restOnly ? "on" : ""} onClick={() => setRestOnly(!restOnly)}>
-                {restOnly ? "Teljes útvonal" : "Hátralévő útvonal"}
-              </button>
-            </div>
-            {message && <div className="meta">{message}</div>}
-            {next && !nav && (
-              <div className="nxb">
-                Következő: <b>{next.stop.address}</b>
-                {next.distance != null && ` (${Math.round(next.distance)} m)`} ·{" "}
-                <button className="all on-dark" onClick={() => startTour(next.stop)}>
-                  Navigálás
-                </button>
-              </div>
-            )}
-          </>
-        )}
 
         {summary && (
           <pre>
