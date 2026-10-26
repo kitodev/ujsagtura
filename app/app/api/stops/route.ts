@@ -14,11 +14,21 @@ export async function GET(req: Request) {
       coalesce(json_agg(json_build_object('id', p.id, 'paper', p.paper) order by p.ord) filter (where p.id is not null), '[]') as stop_papers
     from stops s left join stop_papers p on p.stop_id = s.id
     where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[]) group by s.id order by s.route_id, s.position`;
-  const del = await sql`
-    select d.stop_paper_id, d.status from deliveries d
-    join stop_papers p on p.id = d.stop_paper_id join stops s on s.id = p.stop_id
-    where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[]) and d.day = ${day}::date`;
-  return Response.json({ stops, deliveries: Object.fromEntries(del.map((x) => [x.stop_paper_id, x.status])) });
+  // Az aznapi jelölés; ha aznapra nincs, a „Lemondva” egy korábbi napról öröklődik, amíg át nem állítják
+  // (a „none” sor jelzi, hogy egy adott naptól a lemondás megszűnt).
+  const del = (await sql`
+    select p.id as stop_paper_id,
+      case when d.day = ${day}::date then nullif(d.status, 'none') when d.status = 'cancelled' then 'cancelled' end as status,
+      case when d.day < ${day}::date and d.status = 'cancelled' then to_char(d.day, 'YYYY-MM-DD') end as since
+    from stop_papers p join stops s on s.id = p.stop_id
+    join lateral (select x.status, x.day from deliveries x where x.stop_paper_id = p.id and x.day <= ${day}::date order by x.day desc limit 1) d on true
+    where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[])`) as { stop_paper_id: string; status: string | null; since: string | null }[];
+  const live = del.filter((x) => x.status);
+  return Response.json({
+    stops,
+    deliveries: Object.fromEntries(live.map((x) => [x.stop_paper_id, x.status])),
+    since: Object.fromEntries(live.filter((x) => x.since).map((x) => [x.stop_paper_id, x.since])), // örökölt lemondás kezdete
+  });
 }
 export async function POST(req: Request) {
   const { route_id, address, name, note, papers: raw, lat, lon, merge } = await req.json();

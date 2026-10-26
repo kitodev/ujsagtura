@@ -29,6 +29,9 @@ export function ensurePapers(sql: Sql): Promise<void> {
 }
 
 async function run(sql: Sql) {
+  // „none” = a korábbi lemondás ettől a naptól megszűnt (lásd api/deliveries)
+  await sql`alter table deliveries drop constraint if exists deliveries_status_check`;
+  await sql`alter table deliveries add constraint deliveries_status_check check (status in ('delivered','missing','cancelled','none'))`;
   await removeDuplicates(sql);
   await sql`create unique index if not exists stop_papers_uniq on stop_papers (stop_id, lower(btrim(paper)))`;
   const rows = (await sql`select id, stop_id, paper from stop_papers where paper ~ '[+,;]' order by ord`) as { id: string; stop_id: string; paper: string }[];

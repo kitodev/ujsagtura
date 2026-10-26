@@ -153,18 +153,24 @@ export default function Page() {
     const x = d.toLocaleDateString("sv-SE");
     if (x <= today) setDay(x);
   };
-  useEffect(() => { setDv({}); }, [day]); // napváltáskor az előző nap jelölései ne keveredjenek bele
+  useEffect(() => { setDv({}); setSince({}); }, [day]); // napváltáskor az előző nap jelölései ne keveredjenek bele
   const [routes, setRoutes] = useState<Route[]>([]);
   const [route, setRoute] = useState("");
   const [stops, setStops] = useState<Stop[]>([]);
   const [mapStops, setMapStops] = useState<Stop[]>([]);
   const [dv, setDv] = useState<Record<string, string>>({});
+  // örökölt lemondások: újság → melyik naptól van lemondva (korábbi napon állították be)
+  const [since, setSince] = useState<Record<string, string>>({});
+  const sinceTxt = (id: string) => since[id] && dv[id] === "cancelled" ? ` (${since[id].slice(5).replace("-", ".")}. óta)` : "";
   // szűrés állapot szerint: "" = mind, todo = hátralévő, vagy egy jelölés
   const [flt, setFlt] = useState<"" | "todo" | "delivered" | "missing" | "cancelled">("");
   const [showMap, setShowMap] = useState(false);
   const [gps, setGps] = useState<{ lat: number; lon: number; acc?: number } | null>(null);
   const [last, setLast] = useState<Stop | null>(null);
   const [msg, setMsg] = useState("");
+  const [toast, setToast] = useState("");
+  const toastT = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const showToast = (t: string) => { setToast(t); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(""), 3500); };
   const [sum, setSum] = useState("");
   const [meta, setMeta] = useState<Meta>({ papers: [], addresses: [], names: [] });
   const [q, setQ] = useState("");
@@ -224,6 +230,11 @@ export default function Page() {
       for (const s of d.stops as Stop[]) for (const p of s.stop_papers) delete c[p.id];
       return { ...c, ...d.deliveries };
     });
+    setSince((o) => {
+      const c = { ...o };
+      for (const s of d.stops as Stop[]) for (const p of s.stop_papers) delete c[p.id];
+      return { ...c, ...(d.since ?? {}) };
+    });
     api("/api/meta").then(setMeta).catch(() => {});
   }, [day]);
   useEffect(() => { if (route) load(route); }, [route, load]);
@@ -234,23 +245,70 @@ export default function Page() {
       if (dayRef.current !== day) return;
       setMapStops(visStops(d.stops));
       setDv((o) => ({ ...o, ...d.deliveries }));
+      setSince((o) => ({ ...o, ...(d.since ?? {}) }));
     }).catch(() => setMsg("A címek betöltése a térképhez nem sikerült."));
   }, [showMap, day]);
 
   const handled = (s: Stop) => s.stop_papers.every((p) => dv[p.id]);
   // van még leadandó újsága (jelöletlen vagy „Hiányzik”)
-  const pending = (s: Stop) => s.stop_papers.some((p) => !dv[p.id] || dv[p.id] === "missing");
+  // még nincs elintézve: van jelöletlen újsága (a Leadva, Hiányzik és Lemondva is elintézettnek számít)
+  const pending = (s: Stop) => s.stop_papers.some((p) => !dv[p.id]);
+  const navOn = useRef(false);
+  // A lista sorrendje (a „Hátralévő útvonal” módban az újraszámolt sorrend), és benne a következő elintézetlen cím
+  function nextAfter(id: string | null, d: Record<string, string>): Stop | null {
+    const order = restOnly && restOrder.length
+      ? [...restOrder.map((x) => stops.find((s) => s.id === x)).filter(Boolean) as Stop[], ...stops.filter((s) => !restOrder.includes(s.id))]
+      : stops;
+    const n = order.length, i = id ? order.findIndex((s) => s.id === id) : -1;
+    for (let k = 1; k <= n; k++) {
+      const s = order[(i + k + n) % n];
+      if (s.id !== id && s.lat != null && s.lon != null && s.stop_papers.some((p) => !d[p.id])) return s;
+    }
+    return null;
+  }
+  // Jelölés után: ha a cím minden újsága jelölve van (Leadva / Hiányzik / Lemondva), navigáció közben
+  // pár másodperc múlva indul a következő címre (közben még át lehet jelölni, vagy le lehet állítani).
+  const [advance, setAdvance] = useState<{ from: Stop; to: Stop | null; at: number } | null>(null);
+  function afterMark(s: Stop, d: Record<string, string>) {
+    const done = s.stop_papers.every((p) => d[p.id]);
+    const isTarget = nav?.to.id === s.id || advance?.from.id === s.id || last?.id === s.id || nearDone.current === s.id;
+    if (!done) { if (advance?.from.id === s.id) setAdvance(null); return; }
+    if (!navOn.current || !isTarget && nav) return;
+    setAdvance({ from: s, to: nextAfter(s.id, d), at: Date.now() + 4000 });
+  }
+  const [, setTickNow] = useState(0);
+  useEffect(() => {
+    if (!advance) return;
+    const t = setInterval(() => {
+      setTickNow((x) => x + 1);
+      if (Date.now() >= advance.at) {
+        clearInterval(t);
+        const to = advance.to;
+        setAdvance(null);
+        if (to) { setPicked(to.id); setPickNote("➡️ Következő cím"); startNav(to); }
+        else { navOn.current = false; setNav(null); setFull(false); setDrive(false); setMsg("🎉 Minden cím elintézve!"); }
+      }
+    }, 250);
+    return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [advance]);
 
   async function cycle(s: Stop, p: Paper) {
     const n = NEXT[dv[p.id] ?? ""];
+    const nd = { ...dv }; if (n) nd[p.id] = n; else delete nd[p.id];
+    setSince((o) => { if (!o[p.id]) return o; const c = { ...o }; delete c[p.id]; return c; }); // mától saját jelölés
+    if (n === "cancelled") showToast(`🚫 ${p.paper} – ${s.address}: lemondva mától, amíg át nem állítod.`);
+    else if (dv[p.id] === "cancelled") showToast(`✔ ${p.paper} – ${s.address}: a lemondás mától megszűnt.`);
     setDv((o) => { const c = { ...o }; if (n) c[p.id] = n; else delete c[p.id]; return c; });
     setLast(s);
+    afterMark(s, nd);
     await api("/api/deliveries", "PUT", { ids: [p.id], day, status: n });
   }
   async function allDone(s: Stop) {
     const ids = s.stop_papers.filter((p) => !dv[p.id]).map((p) => p.id);
     setDv((o) => ({ ...o, ...Object.fromEntries(ids.map((id) => [id, "delivered"])) }));
     setLast(s);
+    afterMark(s, { ...dv, ...Object.fromEntries(ids.map((id) => [id, "delivered"])) });
     if (ids.length) await api("/api/deliveries", "PUT", { ids, day, status: "delivered" });
   }
   // Csak az adott túra címeit térképezi fel (alapból a kiválasztott túra)
@@ -445,6 +503,7 @@ export default function Page() {
   const lastReroute = useRef(0);
   // reroute = true: letértünk az útvonalról, az aktuális helyzetből és menetirányból tervezünk újra (mint a Google Maps)
   async function startNav(to: Stop, reroute = false) {
+    if (!reroute) navOn.current = true; // navigációs „menet” fut: a cím elintézése után jön a következő
     if (!gps) { pendingNav.current = to; watch(); setMsg("Helyzet meghatározása…"); return; }
     if (to.lat == null || to.lon == null) { setMsg("Ennek a címnek nincs helye a térképen."); return; }
     if (!reroute) setMsg("Útvonal tervezése…");
@@ -504,7 +563,7 @@ export default function Page() {
       nearDone.current = nav.to.id;
       showTarget(nav.to);
       if (voice && typeof speechSynthesis !== "undefined") {
-        const ps = navPapers.filter((x) => !x.st || x.st === "missing").map((x) => x.p.paper).join(", ");
+        const ps = navPapers.filter((x) => !x.st).map((x) => x.p.paper).join(", ");
         const u = new SpeechSynthesisUtterance(`Közel vagy: ${nav.to.address}.${ps ? " Leadandó: " + ps : ""}`); u.lang = "hu-HU"; speechSynthesis.cancel(); speechSynthesis.speak(u);
       }
     }
@@ -593,16 +652,12 @@ export default function Page() {
   }
 
   const here = gps ?? (last?.lat != null ? { lat: last.lat, lon: last.lon! } : null);
+  // A következő cím a lista sorrendjében (a legutóbb elintézett után), nem a legközelebbi
   const nx = useMemo(() => {
-    let best: Stop | null = null, bd = Infinity;
-    for (const s of stops) {
-      if (s.lat == null || s.stop_papers.every((p) => dv[p.id])) continue;
-      const d = here ? hav(here, { lat: s.lat, lon: s.lon! }) : 0;
-      if (d < bd) { bd = d; best = s; }
-      if (!here) break;
-    }
-    return best ? { s: best, d: here ? bd : null } : null;
-  }, [stops, dv, here]);
+    const best = nextAfter(last?.id ?? null, dv);
+    return best ? { s: best, d: here ? hav(here, { lat: best.lat!, lon: best.lon! }) : null } : null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stops, dv, here, last, restOnly, restOrder]);
 
   const infoStop = infoId ? (stops.find((s) => s.id === infoId) ?? mapStops.find((s) => s.id === infoId) ?? null) : null;
   const restN = new Map(restOrder.map((id, i) => [id, i + 1]));
@@ -698,7 +753,7 @@ export default function Page() {
         <div className="chips">
           {s.stop_papers.map((p) => (
             <button key={p.id} className={`chip ${dv[p.id] ?? ""}`} onClick={() => cycle(s, p)}>
-              {p.paper}{dv[p.id] ? " · " + LABEL[dv[p.id]] : ""}
+              {p.paper}{dv[p.id] ? " · " + LABEL[dv[p.id]] + sinceTxt(p.id) : ""}
             </button>
           ))}
         </div>
@@ -787,8 +842,8 @@ export default function Page() {
                       <div className="navpap">
                         <span>Leadandó:</span>
                         {navPapers.map(({ p, st }) => (
-                          <button key={p.id} className={`chip ${st ?? ""}${!st || st === "missing" ? " todo" : ""}`} onClick={() => cycle(navStop, p)}>
-                            {p.paper}{st ? " · " + LABEL[st] : ""}
+                          <button key={p.id} className={`chip ${st ?? ""}${!st ? " todo" : ""}`} onClick={() => cycle(navStop, p)}>
+                            {p.paper}{st ? " · " + LABEL[st] + sinceTxt(p.id) : ""}
                           </button>
                         ))}
                       </div>
@@ -797,7 +852,7 @@ export default function Page() {
                     <div className="mt" style={{ marginTop: 6 }}>
                       <button onClick={() => startNav(nav.to, true)}>Újratervezés</button>
                       <button className={voice ? "on" : ""} onClick={() => setVoice(!voice)}>🔊 Hang</button>
-                      <button onClick={() => { setNav(null); setDrive(false); setFull(false); }}>Leállítás</button>
+                      <button onClick={() => { navOn.current = false; setAdvance(null); setNav(null); setDrive(false); setFull(false); }}>Leállítás</button>
                     </div>
                   </div>
                 </>);
@@ -808,7 +863,7 @@ export default function Page() {
             {routeLineMsg && <div className="meta" style={{ marginTop: 6 }}>{routeLineMsg}</div>}
             <div className="mt" style={{ margin: "8px 0" }}><button disabled={mapping} onClick={mapAndSort}>{mapping ? "Feltérképezés…" : "Címek feltérképezése"}</button><button disabled={mapping} onClick={async () => { if (!confirm("A túra minden címének helyét újraszámolja, a kézzel javítottakat is. Folytatod?")) return; setMapping(true); try { await geocode(true, route); await sortByProximity(true); } finally { setMapping(false); } }}>Újraszámolás</button><button onClick={watch}>Saját helyzet</button><button className={restOnly ? "on" : ""} onClick={() => setRestOnly(!restOnly)}>{restOnly ? "Teljes útvonal" : "Hátralévő útvonal"}</button></div>
             {msg && <div className="meta">{msg}</div>}
-            {nx && !nav && <div className="nxb">Legközelebbi: <b>{nx.s.address}</b>{nx.d != null && ` (${Math.round(nx.d)} m)`} · <button className="all" style={{ color: "#fff", borderColor: "#fff" }} onClick={() => startNav(nx.s)}>Navigálás</button></div>}
+            {nx && !nav && <div className="nxb">Következő: <b>{nx.s.address}</b>{nx.d != null && ` (${Math.round(nx.d)} m)`} · <button className="all" style={{ color: "#fff", borderColor: "#fff" }} onClick={() => startNav(nx.s)}>Navigálás</button></div>}
           </>
         )}
         {sum && <pre>{sum}<br /><button onClick={() => navigator.clipboard.writeText(sum)}>Másolás</button> <button onClick={() => setSum("")}>Bezár</button></pre>}
@@ -876,6 +931,19 @@ export default function Page() {
               <input placeholder="Megjegyzés (nem kötelező)" value={f.o} onChange={set("o")} />
               <div className="row"><button onClick={() => setDlg("")}>Mégse</button><button className="p" onClick={saveRoute}>Mentés</button></div>
             </>)}
+          </div>
+        </div>
+      )}
+      {toast && <div className="toast" onClick={() => setToast("")}>{toast}</div>}
+      {advance && (
+        <div className="adv">
+          <div>✅ <b>{advance.from.address}</b> elintézve</div>
+          {advance.to
+            ? <div>➡️ Következő: <b>{advance.to.address}</b> – indulás {Math.max(0, Math.ceil((advance.at - Date.now()) / 1000))} mp múlva</div>
+            : <div>🎉 Ez volt az utolsó cím.</div>}
+          <div className="mt" style={{ marginTop: 6 }}>
+            <button className="on" onClick={() => setAdvance({ ...advance, at: Date.now() })}>{advance.to ? "Indulás most" : "Befejezés"}</button>
+            <button onClick={() => setAdvance(null)}>Maradok</button>
           </div>
         </div>
       )}

@@ -22,11 +22,12 @@ export async function GET(req: Request) {
   const route = u.searchParams.get("route") ?? "all";
   const sql = db();
   const rows = await sql`
-    select to_char(g.day, 'YYYY-MM-DD') as day, s.route_id, s.position, s.address, s.name, s.note, p.paper, d.status
+    select to_char(g.day, 'YYYY-MM-DD') as day, s.route_id, s.position, s.address, s.name, s.note, p.paper,
+      case when d.day = g.day::date then nullif(d.status, 'none') when d.status = 'cancelled' then 'cancelled' end as status
     from generate_series(${from}::date, ${to}::date, interval '1 day') as g(day)
     cross join stops s
     join stop_papers p on p.stop_id = s.id
-    left join deliveries d on d.stop_paper_id = p.id and d.day = g.day::date
+    left join lateral (select x.status, x.day from deliveries x where x.stop_paper_id = p.id and x.day <= g.day::date order by x.day desc limit 1) d on true
     where (${route}::text = 'all' or s.route_id = ${route}::text) and s.route_id <> all(${HIDDEN_ROUTES}::text[])
     order by g.day, s.route_id, s.position, p.ord`;
   const multi = from !== to;
