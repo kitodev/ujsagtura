@@ -80,4 +80,6 @@ export class Outbox {
 
 /** Hálózati hiba (nincs internet / nem érhető el a szerver), nem a szerver válasza. */
 export const isNetworkError = (e: unknown) =>
-  e instanceof TypeError || (e instanceof DOMException && e.name === "TimeoutError");
+  e instanceof TypeError ||
+  // a DOMException nem minden környezetben létezik (pl. a telefonos alkalmazásban)
+  (typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "TimeoutError");

@@ -1,7 +1,8 @@
 // Napok kezelése helyi idő szerint, YYYY-MM-DD formában.
 
-/** Dátum → YYYY-MM-DD (helyi idő). */
-export const toISODay = (d: Date) => d.toLocaleDateString("sv-SE");
+const pad = (n: number) => String(n).padStart(2, "0");
+/** Dátum → YYYY-MM-DD (helyi idő; Intl nélkül, hogy a telefonos alkalmazásban is biztosan működjön). */
+export const toISODay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 /** A mai nap. */
 export const todayISO = () => toISODay(new Date());

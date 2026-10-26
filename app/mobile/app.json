@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Újságtúra",
+    "slug": "ujsagtura",
+    "scheme": "ujsagtura",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "hu.ujsagtura.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "A navigációhoz és a következő cím távolságához kell a helyzeted."
+      }
+    },
+    "android": {
+      "package": "hu.ujsagtura.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#1f4e79",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "A navigációhoz és a következő cím távolságához kell a helyzeted."
+        }
+      ]
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "ujsagtura-mobile",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-community/netinfo": "^12.0.1",
+    "expo": "~58.0.19",
+    "expo-file-system": "~58.0.11",
+    "expo-keep-awake": "~58.0.3",
+    "expo-location": "~58.0.19",
+    "expo-speech": "~58.0.3",
+    "expo-status-bar": "~58.0.4",
+    "react": "19.3.0",
+    "react-native": "0.88.0",
+    "react-native-maps": "^1.29.11",
+    "react-native-safe-area-context": "~5.10.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "~58.0.4",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "vitest": "^3.2.4"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "tsc --noEmit && vitest run",
+    "build:apk": "eas build -p android --profile preview"
+  },
+  "private": true
+}

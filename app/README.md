@@ -3,6 +3,9 @@
 Újságkézbesítő alkalmazás: napi címlista jelölésekkel, térkép, Google Maps-szerű navigáció, Excel be- és kivitel.
 Next.js 15 (App Router) + React 19, MapLibre térkép, Neon (PostgreSQL) adatbázis.
 
+A **telefonos alkalmazás** (Expo / React Native) a `mobile/` mappában van – lásd `mobile/README.md`. Ugyanezt az
+API-t és a `lib/` közös logikáját használja.
+
 ## Indítás
 
 ```bash
@@ -75,6 +78,7 @@ lib/                       tiszta (tesztelhető) logika
 tests/unit/                Vitest unit tesztek
 tests/integration/         API-tesztek PostgreSQL-lel
 e2e/                       Playwright tesztek
+mobile/                    telefonos alkalmazás (Expo), a lib/ tiszta logikáját közösen használja
 ```
 
 ## Internet nélküli használat
