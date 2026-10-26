@@ -151,9 +151,11 @@ const EP = [
 ];
 const AREA = `area["boundary"="administrative"]["admin_level"="8"]["name"="Kiskunhalas"]->.a;`;
 const BBOX = "(46.36,19.38,46.52,19.62)";
+/** Kiskunhalas és környéke (Overpass-formátumú határoló téglalap). */
+export const OSM_BBOX = BBOX;
 
 // Az összes tükörszervert egyszerre kérdezzük, az első jó válasz nyer (nem várunk sorban egymás után).
-async function overpass(q: string, ms: number, until: number): Promise<El[]> {
+export async function overpass<T = El>(q: string, ms: number, until: number): Promise<T[]> {
   const errs: string[] = [];
   const one = async (u: string) => {
     const host = new URL(u).host;
@@ -168,7 +170,7 @@ async function overpass(q: string, ms: number, until: number): Promise<El[]> {
         signal: AbortSignal.timeout(Math.max(3000, Math.min(ms, until - Date.now()))),
       });
       if (!r.ok) throw new Error(String(r.status));
-      const j = (await r.json()) as { elements: El[]; remark?: string };
+      const j = (await r.json()) as { elements: T[]; remark?: string };
       if (j.remark && /error|timed out|out of memory/i.test(j.remark)) throw new Error(j.remark);
       return j.elements;
     } catch (e) {

@@ -17,6 +17,8 @@ export default defineConfig({
     permissions: ["geolocation"],
     geolocation: { latitude: 46.43, longitude: 19.48, accuracy: 8 },
     trace: "retain-on-failure",
+    // a tesztek álszervere (page.route) csak service worker nélkül látja a kéréseket
+    serviceWorkers: "block",
     // a térkép WebGL-t használ: grafikus kártya nélkül szoftveres megjelenítés
     launchOptions: { args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] },
   },

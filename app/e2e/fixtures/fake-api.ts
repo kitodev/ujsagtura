@@ -1,6 +1,7 @@
 // Memóriában tárolt, egyszerűsített szerver a végponttól végpontig tartó tesztekhez (adatbázis nélkül).
 // A külső szolgáltatásokat (térképcsempék, útvonaltervező, címkereső) is helyettesíti.
 import type { Page, Route as PwRoute } from "@playwright/test";
+import { buildCompactGraph, type CompactGraph, type OverpassWay } from "../../lib/road-graph";
 
 type Status = "delivered" | "missing" | "cancelled" | "none";
 export type SeedStop = {
@@ -42,6 +43,30 @@ export class FakeApi {
   calls: { method: string; path: string; body?: unknown }[] = [];
   /** Az útvonaltervező céljai (lon,lat). */
   routedTo: string[] = [];
+  /** Az online útvonaltervező „nem érhető el” (offline útvonaltervezés teszteléséhez). */
+  osrmDown = false;
+  /** A jelölések mentése „nincs internet” hibát ad. */
+  deliveriesDown = false;
+  /** Az offline útvonaltervezés úthálózata. */
+  roads: CompactGraph = { v: 1, nodes: [], edges: [], names: [] };
+
+  /** Úthálózat utcákból: [név, [[lat, lon], …]] – a közös pontokon kapcsolódnak. */
+  setRoads(streets: [string, [number, number][]][]) {
+    const ids = new Map<string, number>();
+    const idOf = ([lat, lon]: [number, number]) => {
+      const k = `${lat},${lon}`;
+      if (!ids.has(k)) ids.set(k, ids.size + 1);
+      return ids.get(k)!;
+    };
+    const ways: OverpassWay[] = streets.map(([name, pts], i) => ({
+      type: "way",
+      id: i + 1,
+      nodes: pts.map(idOf),
+      geometry: pts.map(([lat, lon]) => ({ lat, lon })),
+      tags: { highway: "residential", name },
+    }));
+    this.roads = buildCompactGraph(ways);
+  }
 
   seed(stops: SeedStop[]) {
     this.stops = stops.map((s, i) => ({
@@ -78,6 +103,7 @@ export class FakeApi {
 
   /** Egyszerű „L” alakú útvonal: előbb észak-dél, aztán kelet-nyugat irányban. */
   private osrm(r: PwRoute) {
+    if (this.osrmDown) return r.abort("internetdisconnected");
     const pts = r
       .request()
       .url()
@@ -169,7 +195,10 @@ export class FakeApi {
           }
         return r.fulfill({ json: { stops, deliveries, since } });
       }
+      case "GET /api/roads":
+        return r.fulfill({ json: this.roads });
       case "PUT /api/deliveries": {
+        if (this.deliveriesDown) return r.abort("internetdisconnected");
         for (const id of body.ids) {
           if (body.status) this.mark(id, body.day, body.status);
           else {

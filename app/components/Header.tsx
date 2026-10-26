@@ -26,6 +26,8 @@ type Props = {
   onExcel: () => void;
   onLocateStops: () => void;
   onRelocateStops: () => void;
+  offlineSaving: boolean;
+  onSaveOffline: () => void;
 };
 
 export function Header(p: Props) {
@@ -83,6 +85,7 @@ export function Header(p: Props) {
             {item("Közelség szerinti sorrend", p.onSort, !p.canSort)}
             {item(p.mapping ? "Feltérképezés…" : "Címek feltérképezése", p.onLocateStops, p.mapping)}
             {item("Újraszámolás", p.onRelocateStops, p.mapping)}
+            {item(p.offlineSaving ? "Térkép mentése…" : "📥 Térkép mentése offline", p.onSaveOffline, p.offlineSaving)}
             {item("+ Túra", p.onAddRoute)}
             {item("📷 Beolvasás", p.onScan)}
             {item("📊 Excel", p.onExcel)}

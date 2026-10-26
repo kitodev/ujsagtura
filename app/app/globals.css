@@ -941,3 +941,16 @@ header .tools button.on {
   max-width: 720px;
   margin: 0 auto;
 }
+
+/* internet nélküli állapot */
+.offline {
+  position: sticky;
+  top: 0;
+  z-index: 1100;
+  background: #5c4400;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  text-align: center;
+}

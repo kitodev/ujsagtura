@@ -13,6 +13,7 @@ import { NavPanel } from "@/components/NavPanel";
 import Scan from "@/components/Scan";
 import { StopCard } from "@/components/StopCard";
 import { useAutoAdvance } from "@/hooks/useAutoAdvance";
+import { useConnection } from "@/hooks/useConnection";
 import { useGeolocation } from "@/hooks/useGeolocation";
 import { useNavigation } from "@/hooks/useNavigation";
 import { useRouteLine } from "@/hooks/useRouteLine";
@@ -37,6 +38,8 @@ import {
 } from "@/lib/deliveries";
 import { distanceM } from "@/lib/geo";
 import { geocodeStops } from "@/lib/geocode";
+import { saveOfflineMap } from "@/lib/offline-map";
+import { loadRoadGraph } from "@/lib/road-store";
 import { buildPins } from "@/lib/pins";
 import { bestOrder } from "@/lib/route-order";
 import { say } from "@/lib/speech";
@@ -92,6 +95,42 @@ export default function Page() {
 
   // ——— Helyzet, útvonal, navigáció ———
   const { gps, heading, watch } = useGeolocation();
+  const connection = useConnection();
+  /** Internet nélkül a jelölés várólistára került (amint lesz hálózat, elmegy). */
+  const onQueued = () => {
+    connection.refreshPending();
+    showToast("📴 Nincs internet – a jelölés elmentve, amint lesz hálózat, elküldöm.");
+  };
+  const [offlineSaving, setOfflineSaving] = useState(false);
+  /** A túrák környékének térképe és az úthálózat mentése internet nélküli használatra. */
+  async function saveMapOffline() {
+    if (offlineSaving) return;
+    setOfflineSaving(true);
+    setShowMap(true);
+    try {
+      const points =
+        (await api.stops("all", day).catch(() => null))?.stops.filter(isLocated) ?? allStops.filter(isLocated);
+      if (!points.length) {
+        setMessage("Előbb a címek helye kell (Címek feltérképezése), utána menthető a térkép.");
+        return;
+      }
+      const status = await saveOfflineMap(points, (done, total) =>
+        setMessage(`Térkép mentése offline használatra: ${done} / ${total} térképrészlet…`),
+      );
+      setMessage(
+        `📥 Offline térkép mentve: ${status.tiles} térképrészlet` +
+          (status.roads
+            ? " és az úthálózat (útvonaltervezés internet nélkül is)."
+            : ". Az úthálózat most nem töltődött le – próbáld újra."),
+      );
+    } finally {
+      setOfflineSaving(false);
+    }
+  }
+  // a térkép megnyitásakor az úthálózat a háttérben betöltődik (és elmentődik) az offline útvonaltervezéshez
+  useEffect(() => {
+    if (showMap) void loadRoadGraph();
+  }, [showMap]);
   const routeLine = useRouteLine({ enabled: showMap, stops, restOnly, isPending: pending, gps });
   /** Navigációs „menet” fut: egy cím elintézése után jön a következő. */
   const tour = useRef(false);
@@ -188,7 +227,7 @@ export default function Page() {
     else if (current === "cancelled") showToast(`✔ ${p.paper} – ${s.address}: a lemondás mától megszűnt.`);
     setLast(s);
     afterMark(s, next);
-    await api.mark([p.id], day, status);
+    if (await api.mark([p.id], day, status)) onQueued();
   }
 
   async function markAllDelivered(s: Stop) {
@@ -197,7 +236,7 @@ export default function Page() {
     data.setDeliveries((d) => ({ ...d, ...marks }));
     setLast(s);
     afterMark(s, { ...deliveries, ...marks });
-    if (ids.length) await api.mark(ids, day, "delivered");
+    if (ids.length && (await api.mark(ids, day, "delivered"))) onQueued();
   }
 
   // ——— Címek helye és sorrendje ———
@@ -407,6 +446,14 @@ export default function Page() {
 
   return (
     <>
+      {(!connection.online || connection.pendingMarks > 0) && (
+        <div className="offline" role="status">
+          {!connection.online
+            ? "📴 Nincs internet – a térkép és az útvonal a mentett adatokból működik."
+            : "🔄 Küldés folyamatban…"}
+          {connection.pendingMarks > 0 && ` ${connection.pendingMarks} jelölés vár küldésre.`}
+        </div>
+      )}
       {/* a térkép a legfelül, utána a fejléc (túrák, nap, gombok) és a lista */}
       {showMap && (
         <section className="mapsection">
@@ -505,6 +552,8 @@ export default function Page() {
         }
         onSummary={() => setSummary(summaryText(stops, deliveries, day, route))}
         onToggleMap={() => setShowMap(!showMap)}
+        offlineSaving={offlineSaving}
+        onSaveOffline={saveMapOffline}
         onSort={() => sortByProximity()}
         onAddStop={() => setDialog({ kind: "add" })}
         onAddRoute={() => setDialog({ kind: "route" })}

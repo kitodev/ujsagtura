@@ -1,4 +1,5 @@
 // A kliens oldali API-hívások egy helyen.
+import { Outbox } from "./outbox";
 import type { AddressMatch, Meta, Route, Status, StopsResponse } from "./types";
 
 export class ApiError extends Error {
@@ -38,6 +39,8 @@ export type Located = { lat: number; lon: number; kind: string; street?: string 
 
 const q = encodeURIComponent;
 
+const outbox = new Outbox((m) => request("/api/deliveries", "PUT", m));
+
 export const api = {
   routes: () => request<Route[]>("/api/routes"),
   createRoute: (id: string, note = "") => request("/api/routes", "POST", { id, note }),
@@ -49,7 +52,11 @@ export const api = {
   saveLocations: (items: { id: string; lat: number; lon: number }[]) => request("/api/stops", "PATCH", { items }),
   saveOrder: (order: string[]) => request("/api/stops", "PATCH", { order }),
 
-  mark: (ids: string[], day: string, status: Status | null) => request("/api/deliveries", "PUT", { ids, day, status }),
+  /** Jelölés mentése; internet nélkül várólistára kerül (true), és később magától elmegy. */
+  mark: (ids: string[], day: string, status: Status | null) => outbox.submit({ ids, day, status }),
+  /** A várólistán lévő jelölések elküldése; visszaadja, hány maradt. */
+  flushMarks: () => outbox.flush(),
+  pendingMarks: () => outbox.pending().length,
 
   meta: () => request<Meta>("/api/meta"),
   checkAddress: (address: string, route: string, except?: string) =>

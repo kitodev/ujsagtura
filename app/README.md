@@ -77,6 +77,16 @@ tests/integration/         API-tesztek PostgreSQL-lel
 e2e/                       Playwright tesztek
 ```
 
+## Internet nélküli használat
+
+- **Térkép:** a megnézett térképrészleteket a telefon elmenti; a „⋯ Több → 📥 Térkép mentése offline” a túrák
+  környékét előre letölti (legfeljebb 1500 részlet, az OpenStreetMap ingyenes szerverének kímélésével).
+- **Útvonaltervezés:** internettel az online tervező (OSRM); internet nélkül a telefonra mentett úthálózatból
+  (`/api/roads` → `lib/road-graph.ts`, A\* keresés, magyar manőverekkel). A GPS internet nélkül is működik.
+- **Alkalmazás és adatok:** a service worker (`public/sw.js`) elmenti az oldalt és a legutóbb betöltött listákat.
+  Csak **https** (vagy a gépen `localhost`) alatt működik.
+- **Jelölések:** internet nélkül várólistára kerülnek (`lib/outbox.ts`), és amint van hálózat, sorban elmennek.
+
 ## Fontosabb szabályok
 
 - **Jelölés:** koppintásra jelöletlen → Leadva → Hiányzik → Lemondva → jelöletlen. Bármelyik jelölés

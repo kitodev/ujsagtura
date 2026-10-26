@@ -60,6 +60,7 @@ export function useRouteLine({ enabled, stops, restOnly, isPending, gps }: Optio
         routeThrough(pts, abort.signal)
           .then((r) => {
             setLine(r.line);
+            if (r.offline) setMessage((m) => `${m}${m ? " · " : ""}📴 offline úthálózat`);
             if (restOnly) {
               setMessage((m) => `${m} · ${(r.distance / 1000).toFixed(1)} km, kb. ${Math.round(r.duration / 60)} perc`);
             }

@@ -31,6 +31,8 @@ export function useTourData(day: string, onError: (message: string) => void) {
   const [version, setVersion] = useState(0);
   const dayRef = useRef(day);
   dayRef.current = day;
+  const errorRef = useRef(onError);
+  errorRef.current = onError;
 
   useEffect(() => {
     setDeliveries({});
@@ -81,7 +83,7 @@ export function useTourData(day: string, onError: (message: string) => void) {
   }, [day]);
 
   useEffect(() => {
-    if (route) loadRoute(route);
+    if (route) loadRoute(route).catch(() => errorRef.current("A címek most nem tölthetők be (nincs internet?)."));
   }, [route, loadRoute]);
 
   const reloadRoutes = useCallback(async () => setRoutes(visibleRoutes(await api.routes())), []);
