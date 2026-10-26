@@ -38,3 +38,24 @@ test("szerkesztés: másik meglévő címre nem írható át", async ({ page, ap
   await expect(dialog.getByRole("alert")).toContainText("Ez a cím már szerepel");
   await expect(dialog.getByRole("button", { name: "Mentés" })).toBeDisabled();
 });
+
+test("a „253-as napi” önálló túra: a 253-as címe is felvehető bele", async ({ page, api }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "+ Cím" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.locator("select").selectOption("253-napi");
+  await dialog.getByPlaceholder(/Cím –/).fill("Kossuth utca 5.");
+  await dialog.locator(".chip", { hasText: "PE" }).click();
+  await page.waitForTimeout(800); // a dupla cím ellenőrzése lefutott
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  page.once("dialog", (d) => d.accept()); // „a cím nem található” kérdés (nincs térképadat a tesztben)
+  await dialog.getByRole("button", { name: "Mentés" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(api.stops.filter((s) => s.address === "Kossuth utca 5.").map((s) => s.route_id)).toEqual(["253", "253-napi"]);
+
+  // a napi túrán belül viszont ott is csak egyszer szerepelhet
+  await page.getByRole("button", { name: "+ Cím" }).click();
+  await dialog.locator("select").selectOption("253-napi");
+  await dialog.getByPlaceholder(/Cím –/).fill("kossuth u. 5");
+  await expect(dialog.getByRole("alert")).toContainText("253-napi. túra");
+});

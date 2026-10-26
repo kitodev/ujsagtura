@@ -75,3 +75,12 @@ describe("scan-text", () => {
     ]);
   });
 });
+
+describe("addressGroup", () => {
+  it("az önálló túra saját csoport, a többi közös", async () => {
+    const { addressGroup } = await import("@/lib/fixed-routes");
+    expect(addressGroup("253-napi")).toBe("route:253-napi");
+    expect(addressGroup("253")).toBe("common");
+    expect(addressGroup("255")).toBe(addressGroup(undefined));
+  });
+});

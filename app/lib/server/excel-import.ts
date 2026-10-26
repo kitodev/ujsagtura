@@ -5,6 +5,7 @@
 // Ugyanaz a cím több sorban = egy cím több újsággal (a letöltött Excel formátuma is betölthető).
 import type ExcelJS from "exceljs";
 import { addrKey } from "@/lib/addr";
+import { addressGroup } from "@/lib/fixed-routes";
 import { splitPapers } from "@/lib/papers";
 
 type Column = "route" | "pos" | "paper" | "note" | "address" | "name";
@@ -99,14 +100,15 @@ export function parseWorkbook(wb: ExcelJS.Workbook): ImportRow[] {
 }
 
 /**
- * Sorok összevonása címenként: egy cím csak egyszer szerepel (abban a túrában, ahol először),
+ * Sorok összevonása címenként: egy cím csoportonként (lib/fixed-routes.ts) csak egyszer szerepel – abban a túrában, ahol először –,
  * az újságok és megjegyzések összeadódnak. Túra, majd sorszám szerint rendezve.
  */
 export function groupByAddress(rows: ImportRow[], fallbackRoute: string): ImportStop[] {
   const byKey = new Map<string, ImportStop>();
   for (const r of rows) {
-    const key = addrKey(r.address);
-    const s = byKey.get(key) ?? { ...r, route: r.route || fallbackRoute, name: "", note: "", papers: [] };
+    const route = r.route || fallbackRoute;
+    const key = `${addressGroup(route)}|${addrKey(r.address)}`;
+    const s = byKey.get(key) ?? { ...r, route, name: "", note: "", papers: [] };
     if (!s.name && r.name) s.name = r.name;
     if (r.note && !s.note.split(" · ").includes(r.note)) s.note = s.note ? `${s.note} · ${r.note}` : r.note;
     s.papers = splitPapers(s.papers, r.papers);

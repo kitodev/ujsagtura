@@ -32,6 +32,7 @@ const plain = (s: string) =>
 export class FakeApi {
   routes = [
     { id: "253", name: "253 túra", note: "" },
+    { id: "253-napi", name: "253-as napi", note: "" },
     { id: "255", name: "255 túra", note: "" },
   ];
   stops: (Omit<SeedStop, "papers"> & { position: number; stop_papers: { id: string; paper: string }[] })[] = [];
@@ -121,8 +122,12 @@ export class FakeApi {
     });
   }
 
-  private find(address: string, except?: string | null) {
-    return this.stops.find((s) => s.id !== except && plain(s.address) === plain(address));
+  /** Ugyanaz a szabály, mint a szerveren: a „253-napi” önálló túra, a többi közös csoport. */
+  private find(address: string, route?: string | null, except?: string | null) {
+    const group = (r?: string | null) => (r === "253-napi" ? r : "common");
+    return this.stops.find(
+      (s) => s.id !== except && group(s.route_id) === group(route) && plain(s.address) === plain(address),
+    );
   }
 
   private match(s: (typeof this.stops)[number]) {
@@ -175,11 +180,11 @@ export class FakeApi {
         return r.fulfill({ json: { ok: true } });
       }
       case "GET /api/check-address": {
-        const m = this.find(q.get("address") ?? "", q.get("except"));
+        const m = this.find(q.get("address") ?? "", q.get("route"), q.get("except"));
         return r.fulfill({ json: { match: m ? this.match(m) : null } });
       }
       case "POST /api/stops": {
-        const existing = this.find(body.address);
+        const existing = this.find(body.address, body.route_id);
         if (existing) {
           if (!body.merge) return r.fulfill({ status: 409, json: { error: "dupla", match: this.match(existing) } });
           const have = existing.stop_papers.map((p) => p.paper.toLowerCase());

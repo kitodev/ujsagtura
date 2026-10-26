@@ -52,9 +52,9 @@ export const api = {
   mark: (ids: string[], day: string, status: Status | null) => request("/api/deliveries", "PUT", { ids, day, status }),
 
   meta: () => request<Meta>("/api/meta"),
-  checkAddress: (address: string, except?: string) =>
+  checkAddress: (address: string, route: string, except?: string) =>
     request<{ match: AddressMatch | null }>(
-      `/api/check-address?address=${q(address)}${except ? `&except=${q(except)}` : ""}`,
+      `/api/check-address?address=${q(address)}&route=${q(route)}${except ? `&except=${q(except)}` : ""}`,
     ),
   locate: (addresses: string[]) =>
     request<{ results: Record<string, Located>; houses?: boolean }>("/api/locate", "POST", { addresses }),

@@ -65,7 +65,7 @@ export async function createStop(sql: Sql, input: StopInput & { route_id: string
   const papers = papersOrDefault(input.papers);
   await ensureSchema(sql);
 
-  const match = await findAddress(sql, address);
+  const match = await findAddress(sql, address, { route: route_id });
   if (match) {
     if (!merge) throw new HttpError(409, "Erre a címre már viszel ki újságot.", { match });
     const added = await addPapers(sql, match.id, papers);
@@ -96,7 +96,8 @@ export async function updateStop(sql: Sql, id: string, input: StopInput) {
   const papers = papersOrDefault(input.papers);
   await ensureSchema(sql);
 
-  const clash = await findAddress(sql, address, id);
+  const [current] = (await sql`select route_id from stops where id = ${id}::uuid`) as { route_id: string }[];
+  const clash = await findAddress(sql, address, { route: current?.route_id, except: id });
   if (clash) {
     throw new HttpError(
       409,

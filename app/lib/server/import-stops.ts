@@ -1,11 +1,15 @@
 // Az Excelből beolvasott címek mentése: új cím csak akkor jön létre, ha még nem szerepel (minden túrát nézve);
 // a meglévő címekhez legfeljebb új újságok kerülnek.
 import { addrKey } from "@/lib/addr";
+import { addressGroup } from "@/lib/fixed-routes";
 import { addPapers } from "@/lib/dupe";
 import { HIDDEN_ROUTES } from "@/lib/hidden";
 import type { ImportStop } from "./excel-import";
 import { ensureSchema } from "./maintenance";
 import type { Sql } from "./sql";
+
+/** Egy cím azonosítója a dupla címek csoportján belül. */
+const groupKey = (routeId: string, address: string) => `${addressGroup(routeId)}|${addrKey(address)}`;
 
 export type ImportResult = { added: number; merged: number; skipped: number; routes: string[] };
 
@@ -19,11 +23,12 @@ export async function importStops(
   const result: ImportResult = { added: 0, merged: 0, skipped: 0, routes };
 
   const existingRows = (await sql`
-    select id, address from stops where route_id <> all(${HIDDEN_ROUTES}::text[])`) as {
+    select id, route_id, address from stops where route_id <> all(${HIDDEN_ROUTES}::text[])`) as {
     id: string;
+    route_id: string;
     address: string;
   }[];
-  const existing = new Map(existingRows.map((x) => [addrKey(x.address), x.id]));
+  const existing = new Map(existingRows.map((x) => [groupKey(x.route_id, x.address), x.id]));
 
   for (const routeId of routes) {
     const note = routeId === opts.fallbackRoute ? opts.routeNote : "";
@@ -31,13 +36,13 @@ export async function importStops(
       on conflict (id) do nothing`;
 
     const inRoute = stops.filter((s) => s.route === routeId);
-    for (const s of inRoute.filter((s) => existing.has(addrKey(s.address)))) {
-      const fresh = await addPapers(sql, existing.get(addrKey(s.address))!, s.papers);
+    for (const s of inRoute.filter((s) => existing.has(groupKey(routeId, s.address)))) {
+      const fresh = await addPapers(sql, existing.get(groupKey(routeId, s.address))!, s.papers);
       if (fresh.length) result.merged++;
       else result.skipped++;
     }
 
-    const fresh = inRoute.filter((s) => !existing.has(addrKey(s.address)));
+    const fresh = inRoute.filter((s) => !existing.has(groupKey(routeId, s.address)));
     if (!fresh.length) continue;
     const [{ m: lastPos }] =
       await sql`select coalesce(max(position), 0)::int as m from stops where route_id = ${routeId}`;

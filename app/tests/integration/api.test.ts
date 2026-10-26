@@ -60,6 +60,26 @@ describe.skipIf(!TEST_DB)("API (PostgreSQL)", () => {
       expect(await snapshot("2026-10-25")).toEqual(["Kossuth utca 5.: PE=- VAS=- SPORT=-"]);
     });
 
+    it("az önálló „253-as napi” túrába a 253-as címe is felvehető, azon belül viszont csak egyszer", async () => {
+      await sql`insert into routes(id, name, note) values ('253-napi', '253-as napi', '') on conflict do nothing`;
+      await createStop(json("POST", "/api/stops", { route_id: "253", address: "Kossuth utca 5.", papers: ["PE"] }));
+      const napi = await createStop(
+        json("POST", "/api/stops", { route_id: "253-napi", address: "kossuth u. 5", papers: ["VAS"] }),
+      );
+      expect(await napi.json()).toEqual({ ok: true });
+      const again = await createStop(
+        json("POST", "/api/stops", { route_id: "253-napi", address: "Kossuth utca 5", papers: ["X"] }),
+      );
+      expect(again.status).toBe(409);
+      expect((await again.json()).match.route_id).toBe("253-napi");
+      // a közös csoportba (pl. 255) továbbra sem vehető fel
+      expect(
+        (await createStop(json("POST", "/api/stops", { route_id: "255", address: "Kossuth utca 5", papers: ["X"] })))
+          .status,
+      ).toBe(409);
+      expect(await snapshot("2026-10-25")).toEqual(["Kossuth utca 5.: PE=-", "kossuth u. 5: VAS=-"]);
+    });
+
     it("check-address: egyező cím, a szerkesztett kivételével", async () => {
       await createStop(json("POST", "/api/stops", { route_id: "253", address: "Fő utca 1", papers: ["PE"] }));
       const [{ id }] = await sql`select id from stops`;

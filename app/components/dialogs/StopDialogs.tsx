@@ -37,7 +37,7 @@ type AddProps = {
 export function AddStopDialog({ routes, defaultRoute, meta, onClose, onSaved, onMessage }: AddProps) {
   const [fields, setFields] = useState<StopFields>(emptyStopFields);
   const [routeId, setRouteId] = useState(defaultRoute);
-  const [match, setMatch] = useAddressCheck(fields.address, true);
+  const [match, setMatch] = useAddressCheck(fields.address, routeId);
   const canMerge = !!match && newPapersFor(match, fields.papers).length > 0;
 
   async function save() {
@@ -113,7 +113,7 @@ export function EditStopDialog({ stop, meta, onClose, onSaved }: EditProps) {
     lat: null,
     lon: null,
   });
-  const [match, setMatch] = useAddressCheck(fields.address, true, stop.id);
+  const [match, setMatch] = useAddressCheck(fields.address, stop.route_id ?? "", stop.id);
 
   async function save() {
     const address = fields.address.trim();
