@@ -12,18 +12,22 @@ async function fromNetwork(): Promise<CompactGraph | null> {
   const res = await fetchWithTimeout(api.roadsUrl(), {}, 130_000);
   if (!res.ok) return null;
   const text = await res.text();
+  const data = JSON.parse(text) as CompactGraph;
+  if (!data?.edges?.length) return null; // üres úthálózatot nem mentünk el
   try {
     await roadsFile().write(text);
   } catch {
     /* mentés nélkül is használható */
   }
-  return JSON.parse(text);
+  return data;
 }
 
 async function fromStorage(): Promise<CompactGraph | null> {
   try {
     const f = roadsFile();
-    return f.exists ? JSON.parse(await f.text()) : null;
+    if (!f.exists) return null;
+    const data = JSON.parse(await f.text()) as CompactGraph;
+    return data?.edges?.length ? data : null; // a régebben elmentett üres úthálózat nem számít
   } catch {
     return null;
   }

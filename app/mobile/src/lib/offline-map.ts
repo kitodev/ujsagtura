@@ -7,7 +7,8 @@
 import { OfflineManager, type OfflinePack } from "@maplibre/maplibre-react-native";
 import type { LatLon } from "@shared/geo";
 import { boundsOf, MAX_TILES, tilesWithinLimit } from "@shared/offline-map";
-import { styleFileUri } from "./map-style";
+import { fetchWithTimeout } from "./net";
+import { apiBase } from "./settings";
 import { loadRoadGraph } from "./road-store";
 import { readJson, writeJson } from "./storage";
 
@@ -41,6 +42,25 @@ export const offlineStatus = () => readJson<OfflineStatus>(STATUS_KEY);
 /** A megnézett térképrészletek tárolójának mérete (induláskor egyszer). */
 export function setupMapCache() {
   OfflineManager.setMaximumAmbientCacheSize(AMBIENT_CACHE_BYTES).catch(() => {});
+}
+
+/**
+ * Az offline letöltés stílusa. FONTOS: a MapLibre offline letöltése csak http(s) címről tudja betölteni a stílust
+ * (a telefonra írt `file://` stílussal el sem indul – 0 térképrészlet, örök várakozás). Ezért a webes alkalmazás
+ * adja: `public/offline-style.json`. A térképrészletek címe ugyanaz, mint a térkép stílusában (map-style.ts),
+ * így a térkép internet nélkül ezekből rajzol.
+ */
+async function offlineStyleUrl(): Promise<string> {
+  const base = apiBase();
+  if (!base) throw new Error("nincs beállítva a szerver címe (⋯ Több → ⚙ Beállítások)");
+  const url = `${base}/offline-style.json`;
+  const res = await fetchWithTimeout(url, {}, STEP_MS);
+  const json = res.ok ? await res.json().catch(() => null) : null;
+  if (!json?.sources)
+    throw new Error(
+      `a szerveren nincs meg a térképstílus (${url}, HTTP ${res.status}) – tedd ki újra a webes változatot (Vercel)`,
+    );
+  return url;
 }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -120,7 +140,9 @@ async function downloadPack(
       } else if (Date.now() - started > PACK_MAX_MS) {
         finish({ tiles, required, complete: false, error: "a letöltés túl sokáig tartott (10 perc)" });
       } else if (!tiles) {
-        report(`Térkép letöltése… várakozás a térképszerverre (${Math.round(idle / 1000)} mp)`);
+        report(
+          `Térkép letöltése… várakozás a térképszerverre (${Math.round(idle / 1000)} / ${STALL_MS / 1000} mp, utána hibaüzenettel leáll)`,
+        );
       }
     }, 3000);
 
@@ -167,7 +189,7 @@ export async function saveOfflineMap(points: LatLon[], report: (text: string) =>
       await withTimeout(removeOldPacks(), STEP_MS, "A régi mentés törlése");
       OfflineManager.setTileCountLimit(MAX_TILES + 100);
       report("Térkép mentése: előkészítés…");
-      const mapStyle = await withTimeout(styleFileUri(), STEP_MS, "A térképstílus előkészítése");
+      const mapStyle = await withTimeout(offlineStyleUrl(), STEP_MS + 5000, "A térképstílus letöltése");
       report(`Térkép letöltése: 0 / ${plan.length} térképrészlet…`);
       pack = await downloadPack(mapStyle, [b.west, b.south, b.east, b.north], maxZoom, plan.length, report);
       if (pack.error) errors.push("Térkép: " + pack.error);
