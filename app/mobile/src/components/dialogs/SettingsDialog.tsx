@@ -31,7 +31,8 @@ export function SettingsDialog({ onClose, onSave }: Props) {
       <ServerField value={url} onChange={setUrl} />
       <Text style={s.hint}>
         {offline
-          ? `📥 Offline térkép: ${offline.tiles} térképrészlet, úthálózat: ${offline.roads ? "van" : "nincs"} (${offline.savedAt.slice(0, 10)})`
+          ? `📥 Offline térkép: ${offline.tiles}${offline.complete === false && offline.required ? ` / ${offline.required} (nem teljes)` : ""} térképrészlet, úthálózat: ${offline.roads ? "van" : "nincs"} (${offline.savedAt.slice(0, 10)})` +
+            (offline.errors?.length ? `\n⚠ ${offline.errors.join("\n⚠ ")}` : "")
           : "📥 Offline térkép még nincs mentve (⋯ Több → Térkép mentése offline)."}
       </Text>
     </Sheet>

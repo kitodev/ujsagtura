@@ -300,22 +300,33 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
     if (busy) return;
     setBusy("Térkép mentése…");
     setShowMap(true);
+    // a haladás a fejlécben és az üzenetsávban is látszik
+    const report = (text: string) => {
+      setBusy(text.length > 60 ? text.slice(0, 57) + "…" : text);
+      setMessage(text);
+    };
     try {
+      report("Térkép mentése: a címek lekérése…");
       const points =
         (await api.stops("all", day).catch(() => null))?.stops.filter(isLocated) ?? allStops.filter(isLocated);
       if (!points.length) {
         setMessage("Előbb a címek helye kell (Címek feltérképezése), utána menthető a térkép.");
         return;
       }
-      const status = await saveOfflineMap(points, (done, total) =>
-        setMessage(`Térkép mentése offline használatra: ${done} / ${total} térképrészlet…`),
-      );
-      setMessage(
-        `📥 Offline térkép mentve: ${status.tiles} térképrészlet` +
-          (status.roads
-            ? " és az úthálózat (útvonaltervezés internet nélkül is)."
-            : ". Az úthálózat most nem töltődött le – próbáld újra."),
-      );
+      const status = await saveOfflineMap(points, report);
+      const errors = status.errors ?? [];
+      const mapPart = status.complete
+        ? `${status.tiles} térképrészlet`
+        : `${status.tiles}${status.required ? ` / ${status.required}` : ""} térképrészlet (nem teljes)`;
+      const summary =
+        `📥 Offline térkép: ${mapPart}` +
+        (status.roads ? ", úthálózat: kész (útvonaltervezés internet nélkül is)." : ", úthálózat: NINCS.");
+      setMessage(errors.length ? `${summary}\n⚠ ${errors.join("\n⚠ ")}` : summary);
+      if (errors.length) Alert.alert("A térkép mentése nem sikerült teljesen", `${summary}\n\n${errors.join("\n\n")}`);
+    } catch (e) {
+      const text = "A térkép mentése nem sikerült: " + errorText(e);
+      setMessage(text);
+      Alert.alert("Hiba", text);
     } finally {
       setBusy("");
     }
