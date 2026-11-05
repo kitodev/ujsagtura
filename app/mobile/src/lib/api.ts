@@ -3,27 +3,13 @@
 // - a jelölések várólistára kerülnek, és amint van hálózat, sorban elmennek.
 import { isNetworkError, Outbox } from "@shared/outbox";
 import type { AddressMatch, Meta, Route, Status, StopsResponse } from "@shared/types";
+import { ApiError, describeError, NoServerError, NotApiError } from "./errors";
 import { applyPendingMarks } from "./marks";
 import { fetchWithTimeout } from "./net";
 import { apiBase } from "./settings";
 import { mirroredStore, readJson, writeJson } from "./storage";
 
 const TIMEOUT_MS = 20_000;
-
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public body: Record<string, unknown>,
-  ) {
-    super(typeof body.error === "string" ? body.error : `HTTP ${status}`);
-  }
-}
-
-export class NoServerError extends Error {
-  constructor() {
-    super("Nincs beállítva a szerver címe (⋯ Több → ⚙ Beállítások).");
-  }
-}
 
 async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const base = apiBase();
@@ -37,6 +23,8 @@ async function request<T>(path: string, method = "GET", body?: unknown): Promise
     },
     TIMEOUT_MS,
   );
+  const isJson = (res.headers.get("content-type") ?? "").includes("json");
+  if (!isJson) throw new NotApiError(res.status);
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, json);
   return json as T;
@@ -70,7 +58,22 @@ export type StopUpdate = Omit<NewStop, "route_id" | "merge">;
 export type CreateResult = { ok: true; merged?: boolean; match?: AddressMatch; added?: string[] };
 export type Located = { lat: number; lon: number; kind: string; street?: string } | null;
 
+export { ApiError, NoServerError, NotApiError };
+
 const q = encodeURIComponent;
+
+/** A megadott szervercím kipróbálása (a túrák lekérésével). Hibánál a magyarázó üzenetet adja vissza. */
+export async function checkServer(url: string): Promise<{ ok: true; routes: number } | { ok: false; error: string }> {
+  try {
+    const res = await fetchWithTimeout(`${url}/api/routes`, {}, TIMEOUT_MS);
+    if (!(res.headers.get("content-type") ?? "").includes("json")) throw new NotApiError(res.status);
+    const json = await res.json();
+    if (!res.ok) throw new ApiError(res.status, json);
+    return { ok: true, routes: Array.isArray(json) ? json.length : 0 };
+  } catch (e) {
+    return { ok: false, error: describeError(e, url) };
+  }
+}
 const outboxStore = mirroredStore("ujsagtura-outbox");
 const outbox = new Outbox((m) => request("/api/deliveries", "PUT", m), outboxStore);
 

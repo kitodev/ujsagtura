@@ -4,45 +4,39 @@ Ugyanaz az Újságtúra Androidra és iPhone-ra: napi címlista jelölésekkel, 
 térkép és útvonaltervezés. **Ugyanazt az adatbázist használja, mint a weboldal** – a webes alkalmazás API-ján
 keresztül –, így ami a telefonon jelölve van, az a weben is látszik, és fordítva.
 
-Expo SDK 58, React Native 0.88, TypeScript. Térkép: `react-native-maps` OpenStreetMap-részletekkel.
+Expo SDK 58, React Native 0.88, TypeScript. Térkép: **MapLibre** (ugyanaz a térképmotor, mint a weben)
+OpenStreetMap-részletekkel – **nem kell hozzá Google-kulcs**.
 
-## Kipróbálás a telefonon (Expo Go)
-
-1. A telefonra: **Expo Go** (Play Áruház / App Store).
-2. A gépen, ebben a mappában:
-
-   ```bash
-   npm install
-   npx expo start
-   ```
-
-3. A megjelenő QR-kódot olvasd be az Expo Go-val (iPhone-on a Kamera alkalmazással).
-4. Első indításkor az alkalmazás a **szerver címét** kéri: ahol a webes Újságtúra fut
-   (pl. `https://ujsagtura.vercel.app`). Később: ⋯ Több → ⚙ Beállítások.
-   A cím előre is megadható: `.env` fájl `EXPO_PUBLIC_API_URL=...` sorral (lásd `.env.example`).
-
-## Telepíthető alkalmazás (APK) készítése
+## Telepítés a telefonra (APK)
 
 Az [EAS Build](https://docs.expo.dev/build/introduction/) a felhőben készíti el – Android Studio nem kell.
 
 ```bash
+npm install
 npm install -g eas-cli
-eas login                       # ingyenes Expo-fiók
+eas login                       # ingyenes Expo-fiók (expo.dev)
 eas build -p android --profile preview
 ```
 
-A végén kapott linkről az APK közvetlenül a telefonra telepíthető.
+A végén kapott linket nyisd meg a telefonon, töltsd le és telepítsd az APK-t (az Android rákérdez, hogy
+engedélyezed-e az ismeretlen forrásból való telepítést – igen). Első indításkor az alkalmazás a **szerver címét**
+kéri: ahol a webes Újságtúra fut (`https://…`). Később: ⋯ Több → ⚙ Beállítások. A cím előre is beépíthető:
+`.env` fájl `EXPO_PUBLIC_API_URL=...` sorral (lásd `.env.example`).
 
-**Fontos a saját APK-hoz:**
+A kész alkalmazás csak **https** szerverrel beszél (a webes alkalmazás Vercelen magától https-es).
 
-- **Google Maps kulcs (Android):** a térkép Androidon a Google Maps motorját használja (a képet az
-  OpenStreetMap adja). Expo Go-ban kulcs nélkül is megy, a saját APK-hoz kell egy ingyenes „Maps SDK for Android”
-  kulcs a Google Cloud Console-ból. Ezt az expo.dev oldalon a projekt _Environment variables_ részében
-  `GOOGLE_MAPS_ANDROID_KEY` néven add meg (az `app.config.js` innen olvassa).
-- **https:** a kész alkalmazás csak `https://` szerverrel beszél (a sima `http://` csak Expo Go-ban, fejlesztéskor
-  működik, pl. `http://192.168.1.10:3000`).
-- iPhone-ra az App Store-on / TestFlighton keresztül lehet telepíteni (ehhez Apple fejlesztői fiók kell):
-  `eas build -p ios`.
+iPhone-ra az App Store-on / TestFlighton keresztül lehet telepíteni (ehhez Apple fejlesztői fiók kell):
+`eas build -p ios`.
+
+## Fejlesztés
+
+A MapLibre saját natív kódot hoz, ezért az **Expo Go nem elég**: egyszer egy fejlesztői változatot kell
+telepíteni a telefonra, utána a kódváltozások azonnal megjelennek rajta.
+
+```bash
+eas build -p android --profile development   # egyszer: fejlesztői APK, telepítsd a telefonra
+npx expo start                                # a fejlesztői alkalmazás ehhez csatlakozik (QR-kód)
+```
 
 ## Mit tud
 
@@ -62,8 +56,9 @@ A fotóról / Excelből beolvasás csak a webes változatban van.
 
 ## Internet nélkül
 
-- **Térkép:** a megnézett térképrészleteket az alkalmazás elmenti; a „⋯ Több → 📥 Térkép mentése offline” a túrák
-  környékét előre letölti (legfeljebb 1500 részlet). Internet nélkül a térkép ezekből rajzol.
+- **Térkép:** a megnézett térképrészleteket a térkép megőrzi (150 MB-ig); a „⋯ Több → 📥 Térkép mentése offline” a
+  túrák környékét előre letölti (MapLibre offline csomag, legfeljebb ~1500 részlet). Internet nélkül ezekből rajzol.
+  A jelölők számaihoz szükséges betűképet az alkalmazás magával hozza (`assets/map`, `scripts/make-map-assets.py`).
 - **Útvonal:** internettel az online tervező (OSRM), nélküle a telefonra mentett úthálózat (ugyanaz a kód, mint a
   weben: `lib/road-graph.ts`). A GPS internet nélkül is működik.
 - **Listák:** a legutóbb letöltött túrák és címek a telefonon maradnak.
@@ -74,12 +69,12 @@ A fotóról / Excelből beolvasás csak a webes változatban van.
 ```
 App.tsx                 indulás: beállítások, várólista, szervercím bekérése
 src/MainScreen.tsx      a fő képernyő (térkép, fejléc, lista, párbeszédek) – a webes app/page.tsx megfelelője
-src/components/         TourMap, MapButtons, PinInfo, NavPanel, Header, DayPicker, FilterBar, StopCard,
+src/components/         TourMap (MapLibre), MapButtons, PinInfo, NavPanel, Header, DayPicker, FilterBar, StopCard,
                         PaperChip, StopForm, AdvanceBanner, ui; dialogs/ (cím, túra, Excel, beállítások)
 src/hooks/              useTourData, useLocation (GPS + iránytű), useNavigation, useAutoAdvance, useRouteLine,
                         useConnection, useSearch, useSelection, useAddressCheck, useToast
 src/lib/                api (szerverhívások, offline tárolás, várólista), routing (OSRM / offline),
-                        road-store, offline-map (térképrészletek fájlba), settings, storage, net, speech, time …
+                        road-store, offline-map (offline csomag), map-style (stílus, betűkép), settings, storage, net, speech, time …
 ../lib/                 KÖZÖS a webes alkalmazással (`@shared/...`): jelölések szabályai, navigáció, útvonal-sorrend,
                         úthálózat, dátumok, újságok – egy helyen, mindkét változat ezt használja
 tests/                  Vitest unit tesztek
@@ -90,9 +85,10 @@ Ezért az alkalmazást a teljes repóból kell építeni (az EAS Build ezt magá
 
 ## Parancsok
 
-| Parancs             | Mit csinál                              |
-| ------------------- | --------------------------------------- |
-| `npx expo start`    | fejlesztői szerver (Expo Go-hoz QR-kód) |
-| `npm run check`     | típusellenőrzés + unit tesztek          |
-| `npx eslint .`      | lint                                    |
-| `npm run build:apk` | Android APK az EAS Builddel             |
+| Parancs             | Mit csinál                                |
+| ------------------- | ----------------------------------------- |
+| `npx expo start`    | fejlesztői szerver (a fejlesztői APK-hoz) |
+| `npm run check`     | típusellenőrzés + unit tesztek            |
+| `npx eslint .`      | lint                                      |
+| `npm run build:apk` | Android APK az EAS Builddel               |
+| `npm run build:dev` | fejlesztői APK (egyszer kell)             |

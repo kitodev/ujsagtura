@@ -94,6 +94,8 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
   const [infoId, setInfoId] = useState("");
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [showTop, setShowTop] = useState(false);
+  /** A térképet éppen húzzák: közben a lista ne görögjön. */
+  const [mapTouch, setMapTouch] = useState(false);
   const [rootHeight, setRootHeight] = useState(height);
   const scroll = useRef<ScrollViewInstance>(null);
   const mapRef = useRef<TourMapHandle>(null);
@@ -482,7 +484,7 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
       <View style={{ flex: 1 }} onLayout={(e: LayoutChangeEvent) => setRootHeight(e.nativeEvent.layout.height)}>
         <ScrollView
           ref={scroll}
-          scrollEnabled={!full}
+          scrollEnabled={!full && !mapTouch}
           keyboardShouldPersistTaps="handled"
           onScroll={(e) => setShowTop(e.nativeEvent.contentOffset.y > SHOW_TOP_AFTER)}
           scrollEventThrottle={200}
@@ -503,10 +505,10 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
                 }
                 follow={!!nav}
                 drive={drive}
-                online={connection.online}
                 focus={focus}
                 onPick={onPinPick}
                 onMapPress={() => setInfoId("")}
+                onTouching={setMapTouch}
               />
               <MapButtons
                 full={full}

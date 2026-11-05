@@ -6,6 +6,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { ServerField } from "@/components/dialogs/SettingsDialog";
 import { Btn } from "@/components/ui";
 import { initApi } from "@/lib/api";
+import { setupMapCache } from "@/lib/offline-map";
 import { loadApiBase, saveApiBase } from "@/lib/settings";
 import { MainScreen } from "@/MainScreen";
 import { C } from "@/theme";
@@ -14,6 +15,7 @@ export default function App() {
   const [server, setServer] = useState<string | null>(null);
 
   useEffect(() => {
+    setupMapCache();
     Promise.all([loadApiBase(), initApi()]).then(([base]) => setServer(base));
   }, []);
 

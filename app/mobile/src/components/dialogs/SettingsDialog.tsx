@@ -1,6 +1,8 @@
 // Beállítások: a szerver (a webes Újságtúra) címe, és az offline térkép állapota.
 import { useEffect, useState } from "react";
 import { StyleSheet, Text } from "react-native";
+import { checkServer } from "@/lib/api";
+import { normalizeBase } from "@/lib/net";
 import { offlineStatus, type OfflineStatus } from "@/lib/offline-map";
 import { apiBase } from "@/lib/settings";
 import { C } from "@/theme";
@@ -37,19 +39,46 @@ export function SettingsDialog({ onClose, onSave }: Props) {
 }
 
 export function ServerField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  async function run() {
+    const url = normalizeBase(value);
+    if (!url) return;
+    setTesting(true);
+    const r = await checkServer(url);
+    setTesting(false);
+    setTest(
+      r.ok
+        ? { ok: true, text: `✅ Rendben: a szerver elérhető, ${r.routes} túra.` }
+        : { ok: false, text: `❌ ${r.error}` },
+    );
+  }
+
   return (
     <>
       <Text style={s.label}>A szerver címe (ahol a webes Újságtúra fut):</Text>
       <Field
         value={value}
-        onChangeText={onChange}
+        onChangeText={(v) => {
+          onChange(v);
+          setTest(null);
+        }}
         placeholder="pl. https://ujsagtura.vercel.app"
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
       />
+      <Btn
+        small
+        label={testing ? "Ellenőrzés…" : "🔌 Kapcsolat ellenőrzése"}
+        onPress={run}
+        disabled={testing || !value.trim()}
+      />
+      {test && <Text style={[s.result, { color: test.ok ? C.ok : C.ca }]}>{test.text}</Text>}
       <Text style={s.hint}>
-        A telefonos alkalmazás ugyanazt az adatbázist használja, mint a weboldal: amit itt jelölsz, ott is látszik.
+        Csak a cím eleje kell (pl. https://valami.vercel.app), a végére semmi más. A telefonos alkalmazás ugyanazt az
+        adatbázist használja, mint a weboldal: amit itt jelölsz, ott is látszik.
       </Text>
     </>
   );
@@ -58,4 +87,5 @@ export function ServerField({ value, onChange }: { value: string; onChange: (v: 
 const s = StyleSheet.create({
   label: { color: C.tx, fontWeight: "600" },
   hint: { color: C.mu, fontSize: 13 },
+  result: { fontWeight: "600" },
 });

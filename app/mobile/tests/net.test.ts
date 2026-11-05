@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isNetworkError } from "@shared/outbox";
-import { fetchWithTimeout, isAbort, normalizeBase, TimeoutError } from "@/lib/net";
+import { fetchWithTimeout, isAbort, NetworkError, normalizeBase, TimeoutError } from "@/lib/net";
 
 describe("normalizeBase", () => {
   it("https:// elé, záró perjel nélkül", () => {
@@ -24,6 +24,25 @@ describe("fetchWithTimeout", () => {
           }),
         ),
     );
+
+  it("„fetch failed: UnknownHostException” (nincs internet) hálózati hiba – a jelölés várólistára kerül", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.reject(
+          new Error(
+            'fetch failed: java.net.UnknownHostException: Unable to resolve host "ujsagtura.vercel.app": No address associated with hostname',
+          ),
+        ),
+      ),
+    );
+    const err = await fetchWithTimeout("https://x", {}, 5000).catch((e) => e);
+    expect(err).toBeInstanceOf(NetworkError);
+    expect(isNetworkError(err)).toBe(true);
+    // a közös felismerés a csomagolás nélkül is
+    expect(isNetworkError(new Error("fetch failed: java.net.UnknownHostException"))).toBe(true);
+    expect(isNetworkError(new Error("HTTP 500"))).toBe(false);
+  });
 
   it("időtúllépéskor hálózati hibát dob (a jelölés várólistára kerülhet)", async () => {
     vi.stubGlobal("fetch", hanging());

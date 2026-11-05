@@ -9,7 +9,7 @@ const roadsFile = () => new File(Paths.document, "roads.json");
 let loading: Promise<RoadGraph | null> | null = null;
 
 async function fromNetwork(): Promise<CompactGraph | null> {
-  const res = await fetchWithTimeout(api.roadsUrl(), {}, 90_000);
+  const res = await fetchWithTimeout(api.roadsUrl(), {}, 130_000);
   if (!res.ok) return null;
   const text = await res.text();
   try {

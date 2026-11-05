@@ -55,3 +55,17 @@ describe("magyar dátum és idő", () => {
     expect(clockHu(new Date(2026, 0, 1, 7, 5))).toBe("07:05");
   });
 });
+
+describe("describeError", () => {
+  const server = "https://pelda.vercel.app";
+  it("megmondja, mi a baj", async () => {
+    const { ApiError, NotApiError, describeError } = await import("@/lib/errors");
+    expect(describeError(new TypeError("Network request failed"), server)).toContain("Nem érem el a szervert");
+    expect(describeError(new ApiError(401, {}), server)).toContain("Deployment Protection");
+    expect(describeError(new NotApiError(200), server)).toContain("weboldal jött");
+    expect(describeError(new ApiError(404, {}), server)).toContain("404");
+    expect(describeError(new ApiError(500, { error: "password authentication failed" }), server)).toContain(
+      "DATABASE_URL",
+    );
+  });
+});

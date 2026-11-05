@@ -1,6 +1,8 @@
 // A túrák, címek és az adott napi jelölések betöltése, napváltáskor tisztán (az előző nap adatai nem keverednek bele).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { describeError } from "@/lib/errors";
+import { apiBase } from "@/lib/settings";
 import { HIDDEN_ROUTES } from "@shared/hidden";
 import type { Deliveries, Meta, Route, Stop, StopsResponse } from "@shared/types";
 
@@ -46,7 +48,7 @@ export function useTourData(day: string, onError: (message: string) => void) {
         setRoutes(list);
         setRoute((r) => r || (list[0]?.id ?? ""));
       })
-      .catch(() => onError("Nem érhető el az adatbázis"));
+      .catch((e) => onError(describeError(e, apiBase())));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- egyszer, induláskor
   }, []);
 
@@ -82,7 +84,7 @@ export function useTourData(day: string, onError: (message: string) => void) {
   }, [day]);
 
   useEffect(() => {
-    if (route) loadRoute(route).catch(() => errorRef.current("A címek most nem tölthetők be (nincs internet?)."));
+    if (route) loadRoute(route).catch((e) => errorRef.current(describeError(e, apiBase())));
   }, [route, loadRoute]);
 
   const reloadRoutes = useCallback(async () => setRoutes(visibleRoutes(await api.routes())), []);
