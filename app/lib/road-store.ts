@@ -12,19 +12,22 @@ const hasCacheStorage = () => typeof caches !== "undefined";
 async function fromNetwork(): Promise<CompactGraph | null> {
   const res = await fetch(URL_ROADS, { signal: AbortSignal.timeout(90_000) });
   if (!res.ok) return null;
+  const data = (await res.clone().json()) as CompactGraph;
+  if (!data?.edges?.length) return null; // üres úthálózatot nem mentünk el
   if (hasCacheStorage()) {
     await caches
       .open(DATA_CACHE)
       .then((c) => c.put(URL_ROADS, res.clone()))
       .catch(() => {});
   }
-  return res.json();
+  return data;
 }
 
 async function fromStorage(): Promise<CompactGraph | null> {
   if (!hasCacheStorage()) return null;
   const hit = await caches.match(URL_ROADS).catch(() => undefined);
-  return hit ? hit.json() : null;
+  const data = hit ? ((await hit.json().catch(() => null)) as CompactGraph | null) : null;
+  return data?.edges?.length ? data : null; // a régebben elmentett üres úthálózat nem számít
 }
 
 /** Az úthálózat (null, ha sem a szerverről, sem a tárolóból nem érhető el). `refresh`: mindenképp letölti újra. */

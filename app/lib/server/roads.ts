@@ -6,7 +6,9 @@ import type { Sql } from "./sql";
 
 const CACHE_KEY = "roads";
 const FRESH_MS = 30 * 24 * 3600 * 1000;
-const QUERY = `[out:json][timeout:60]; way["highway"]${OSM_BBOX}; out geom tags;`;
+// FONTOS: „out geom;” (alap részletesség), NEM „out geom tags;” – a „tags” részletesség kihagyja az utak
+// csomópont-listáját (nodes), amely nélkül az utak nem kapcsolhatók össze, és üres úthálózat jönne ki.
+const QUERY = `[out:json][timeout:60]; way["highway"]${OSM_BBOX}; out geom;`;
 
 let memory: { at: number; graph: CompactGraph } | null = null;
 
@@ -33,6 +35,7 @@ export async function getRoadGraph(sql: Sql): Promise<CompactGraph> {
         on conflict (key) do update set data = excluded.data, t = now()`;
       memory = { at: Date.now(), graph };
     }
+    if (!graph.edges.length) throw new Error("az OpenStreetMap üres úthálózatot adott vissza");
     return graph;
   } catch (e) {
     if (stored) return stored.data; // régi úthálózat jobb, mint a semmi

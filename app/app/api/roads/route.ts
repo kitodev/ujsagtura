@@ -9,6 +9,8 @@ export const maxDuration = 120;
 export const GET = handle(async () => {
   try {
     const graph = await getRoadGraph(db());
+    // üres úthálózatot soha ne tároljon el a Vercel gyorsítótára (különben egy napig azt adná mindenkinek)
+    if (!graph.edges?.length) throw new Error("üres úthálózat");
     return Response.json(graph, { headers: { "Cache-Control": "public, max-age=86400" } });
   } catch (e) {
     throw new HttpError(502, "Az úthálózat most nem tölthető le: " + (e instanceof Error ? e.message : String(e)));

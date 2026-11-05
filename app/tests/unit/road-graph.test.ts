@@ -101,22 +101,44 @@ describe("RoadGraph", () => {
     expect(east.legs[0].steps.map((s) => s.name)).toContain("Kossuth utca");
   });
 
-  it("nincs út: null", () => {
+  it("a hálózatból kilógó darabra nem illeszt (különben nem lenne út)", () => {
     const island = new RoadGraph(
       buildCompactGraph([
         fo,
         way(
-          "Sziget utca",
+          "Parkoló",
           [
-            [46.5, 19.5],
-            [46.501, 19.5],
+            [46.4325, 19.4815],
+            [46.4326, 19.4816],
           ],
-          {},
+          { highway: "service" },
           [50, 51],
         ),
       ]),
     );
-    expect(island.route({ lat: 46.43, lon: 19.48 }, { lat: 46.5005, lon: 19.5 })).toBeNull();
+    // a cél a parkoló mellett van, de a parkolóból nem vezet út: a Fő utcára illeszt
+    const r = island.route({ lat: 46.43, lon: 19.48 }, { lat: 46.4325, lon: 19.4815 })!;
+    expect(r).not.toBeNull();
+    expect(r.legs[0].steps[0].name).toBe("Fő utca");
+  });
+
+  it("ha az egyirányúság miatt nincs szabályos út, egyirányúság nélkül tervez", () => {
+    // egyetlen egyirányú utca, a cél visszafelé van rajta
+    const g = new RoadGraph(
+      buildCompactGraph([
+        way(
+          "Zsák utca",
+          [
+            [46.44, 19.48],
+            [46.441, 19.48],
+            [46.442, 19.48],
+          ],
+          { oneway: "yes" },
+          [60, 61, 62],
+        ),
+      ]),
+    );
+    expect(g.route({ lat: 46.442, lon: 19.48 }, { lat: 46.44, lon: 19.48 })).not.toBeNull();
   });
 
   it("több ponton át egy összefüggő vonal", () => {
@@ -128,6 +150,15 @@ describe("RoadGraph", () => {
     expect(r.geometry.coordinates[0]).toEqual([19.48, 46.43]);
     expect(r.geometry.coordinates.at(-1)).toEqual([19.48, 46.434]);
     expect(r.distance).toBeGreaterThan(600);
+  });
+
+  it("több ponton át: ha egy szakaszra nincs út, az egyenes, de a vonal nem bukik el", () => {
+    const empty = new RoadGraph({ v: 1, nodes: [46.43, 19.48, 46.431, 19.48], edges: [0, 1, 0, 0], names: [""] });
+    const r = empty.routeThrough([
+      { lat: 46.43, lon: 19.48 },
+      { lat: 46.431, lon: 19.48 },
+    ]);
+    expect(r).not.toBeNull();
   });
 });
 

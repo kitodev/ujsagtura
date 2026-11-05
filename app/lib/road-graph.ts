@@ -123,6 +123,17 @@ class MinHeap {
   }
 }
 
+/** Egyenes szakasz két pont között (ha az úthálózaton nincs köztük út). */
+function straightLeg(a: LatLon, b: LatLon): OsrmRoute {
+  const distance = distanceM(a, b);
+  return {
+    geometry: { coordinates: [[a.lon, a.lat], [b.lon, b.lat]] },
+    legs: [{ steps: [] }],
+    distance,
+    duration: distance / SPEED_MS,
+  };
+}
+
 /** Turn angle (−180…180, jobbra pozitív) egyik irányból a másikba. */
 export const turnAngle = (from: number, to: number) => ((to - from + 540) % 360) - 180;
 
@@ -140,7 +151,11 @@ export function turnModifier(angle: number): string {
 export class RoadGraph {
   readonly points: LatLon[];
   private readonly adj: Arc[][];
+  /** Ugyanaz, egyirányúság nélkül (tartalék, ha az egyirányú utcák miatt nincs szabályos út). */
+  private readonly adjBoth: Arc[][];
   private readonly edgeList: Edge[] = [];
+  /** A ráillesztéshez használt szakaszok: csak a legnagyobb összefüggő úthálózatból (lásd mainEdges). */
+  private readonly snapEdges: Edge[];
   readonly names: string[];
 
   constructor(g: CompactGraph) {
@@ -148,13 +163,54 @@ export class RoadGraph {
     this.points = [];
     for (let i = 0; i < g.nodes.length; i += 2) this.points.push({ lat: g.nodes[i], lon: g.nodes[i + 1] });
     this.adj = this.points.map(() => []);
+    this.adjBoth = this.points.map(() => []);
     for (let i = 0; i < g.edges.length; i += 4) {
       const [a, b, name, oneway] = g.edges.slice(i, i + 4);
       const len = distanceM(this.points[a], this.points[b]);
       this.edgeList.push({ a, b, len, name, oneway });
       if (oneway !== -1) this.adj[a].push({ to: b, len, name });
       if (oneway !== 1) this.adj[b].push({ to: a, len, name });
+      this.adjBoth[a].push({ to: b, len, name });
+      this.adjBoth[b].push({ to: a, len, name });
     }
+    this.snapEdges = this.mainEdges();
+  }
+
+  /**
+   * A legnagyobb összefüggő úthálózat szakaszai. Az OpenStreetMapben sok a sehova sem kapcsolódó darab
+   * (parkoló, udvari bekötőút, földút-darab); ha egy címet vagy a saját helyzetet ilyenre illesztenénk,
+   * onnan nem vezetne út sehova, és az egész útvonal elbukna.
+   */
+  private mainEdges(): Edge[] {
+    const n = this.points.length;
+    const parent = new Int32Array(n);
+    for (let i = 0; i < n; i++) parent[i] = i;
+    const find = (x: number): number => {
+      while (parent[x] !== x) {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+      }
+      return x;
+    };
+    for (const e of this.edgeList) {
+      const ra = find(e.a);
+      const rb = find(e.b);
+      if (ra !== rb) parent[ra] = rb;
+    }
+    const size = new Map<number, number>();
+    for (const e of this.edgeList) {
+      const r = find(e.a);
+      size.set(r, (size.get(r) ?? 0) + 1);
+    }
+    let best = -1;
+    let bestSize = 0;
+    for (const [r, c] of size) {
+      if (c > bestSize) {
+        best = r;
+        bestSize = c;
+      }
+    }
+    return this.edgeList.filter((e) => find(e.a) === best);
   }
 
   get size() {
@@ -165,7 +221,7 @@ export class RoadGraph {
   nearestEdge(p: LatLon): Snap | null {
     const k = metersPerDegree(p.lat);
     let best: Snap | null = null;
-    for (const e of this.edgeList) {
+    for (const e of this.snapEdges) {
       const a = this.points[e.a];
       const b = this.points[e.b];
       // gyors előszűrés: a szakasz befoglaló téglalapja túl messze van
@@ -190,12 +246,15 @@ export class RoadGraph {
    * Legrövidebb út két útra illesztett pont között (A*).
    * Az eredmény: a csomópontok sorban, és az egyes szakaszok utcanevei (a kezdő- és célszakasszal együtt).
    */
-  private shortestPath(from: Snap, to: Snap): { path: number[]; names: number[] } | null {
+  private shortestPath(from: Snap, to: Snap, ignoreOneway = false): { path: number[]; names: number[] } | null {
     const { edge: fe, t: ft } = from;
     const { edge: te, t: tt } = to;
     // ugyanazon a szakaszon, megengedett irányban: nincs köztes csomópont
-    if (fe === te && (fe.oneway === 0 || (fe.oneway === 1 ? tt >= ft : tt <= ft)))
+    if (fe === te && (ignoreOneway || fe.oneway === 0 || (fe.oneway === 1 ? tt >= ft : tt <= ft)))
       return { path: [], names: [fe.name] };
+    const adj = ignoreOneway ? this.adjBoth : this.adj;
+    const fOne = ignoreOneway ? 0 : fe.oneway;
+    const tOne = ignoreOneway ? 0 : te.oneway;
 
     const n = this.points.length;
     const dist = new Float64Array(n).fill(Infinity);
@@ -209,11 +268,11 @@ export class RoadGraph {
         heap.push(cost + distanceM(this.points[node], goal), node);
       }
     };
-    if (fe.oneway !== 1) start(fe.a, ft * fe.len); // visszafelé a szakasz elejére
-    if (fe.oneway !== -1) start(fe.b, (1 - ft) * fe.len); // előre a szakasz végére
+    if (fOne !== 1) start(fe.a, ft * fe.len); // visszafelé a szakasz elejére
+    if (fOne !== -1) start(fe.b, (1 - ft) * fe.len); // előre a szakasz végére
     const exits: [number, number][] = []; // [csomópont, maradék a célig]
-    if (te.oneway !== -1) exits.push([te.a, tt * te.len]);
-    if (te.oneway !== 1) exits.push([te.b, (1 - tt) * te.len]);
+    if (tOne !== -1) exits.push([te.a, tt * te.len]);
+    if (tOne !== 1) exits.push([te.b, (1 - tt) * te.len]);
 
     let bestEnd = -1;
     let bestCost = Infinity;
@@ -227,7 +286,7 @@ export class RoadGraph {
           bestEnd = u;
         }
       }
-      for (const arc of this.adj[u]) {
+      for (const arc of adj[u]) {
         const d = dist[u] + arc.len;
         if (d < dist[arc.to]) {
           dist[arc.to] = d;
@@ -256,7 +315,8 @@ export class RoadGraph {
     const a = this.nearestEdge(from);
     const b = this.nearestEdge(to);
     if (!a || !b) return null;
-    const found = this.shortestPath(a, b);
+    // ha az egyirányú utcák miatt nincs szabályos út (pl. hibás OSM-adat), inkább az egyirányúság nélkül
+    const found = this.shortestPath(a, b) ?? this.shortestPath(a, b, true);
     if (!found) return null;
 
     // az úton haladó pontok és szakaszaik utcaneve
@@ -306,8 +366,8 @@ export class RoadGraph {
     const coords: number[][] = [];
     let distance = 0;
     for (let i = 1; i < points.length; i++) {
-      const leg = this.route(points[i - 1], points[i]);
-      if (!leg) return null;
+      // ha egy szakaszra mégsem található út, az egyenes vonal – a többi szakasz attól még úton megy
+      const leg = this.route(points[i - 1], points[i]) ?? straightLeg(points[i - 1], points[i]);
       coords.push(...(i === 1 ? leg.geometry.coordinates : leg.geometry.coordinates.slice(1)));
       distance += leg.distance;
     }

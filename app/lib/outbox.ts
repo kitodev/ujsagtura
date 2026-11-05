@@ -78,8 +78,13 @@ export class Outbox {
   }
 }
 
+const NETWORK_MESSAGE =
+  /fetch failed|network request failed|failed to fetch|networkerror|unknownhost|unable to resolve host|failed to connect|connectexception|sockettimeout|timed? ?out|no address associated/i;
+
 /** Hálózati hiba (nincs internet / nem érhető el a szerver), nem a szerver válasza. */
 export const isNetworkError = (e: unknown) =>
   e instanceof TypeError ||
+  // egyes környezetek (pl. az újabb React Native) a fetch hibáját sima Error-ként dobják
+  (e instanceof Error && NETWORK_MESSAGE.test(e.message)) ||
   // a DOMException nem minden környezetben létezik (pl. a telefonos alkalmazásban)
   (typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "TimeoutError");
