@@ -621,8 +621,8 @@ export default function Page() {
               {gps ? ", a legközelebbivel kezdve." : "."}
               {!gps && (
                 <div className="meta">
-                  A saját helyzeted még nem ismert: engedélyezd a helymeghatározást, és a sorrend a hozzád
-                  legközelebbi címmel fog kezdődni.
+                  A saját helyzeted még nem ismert: engedélyezd a helymeghatározást, és a sorrend a hozzád legközelebbi
+                  címmel fog kezdődni.
                 </div>
               )}
               <div className="meta">
