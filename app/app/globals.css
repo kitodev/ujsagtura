@@ -954,3 +954,27 @@ header .tools button.on {
   padding: 6px 12px;
   text-align: center;
 }
+
+/* Pótlás útvonal */
+.replace-btn {
+  background: #8a5a00 !important;
+  color: #fff !important;
+  border-color: #8a5a00 !important;
+}
+.replace-bar {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #8a5a00;
+  background: rgba(138, 90, 0, 0.18);
+}
+.replace-bar .meta {
+  margin-top: 4px;
+}
+.replace-bar button {
+  flex: none;
+}

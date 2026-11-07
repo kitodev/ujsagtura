@@ -14,17 +14,33 @@ type Options = {
   /** Az elintézetlen címek (hátralévő módban ezekből számol). */
   isPending: (s: Stop) => boolean;
   gps: LatLon | null;
+  /** A részútvonal neve a kiírásban (pl. „Hátralévő útvonal”, „Pótlás útvonal”). */
+  label?: string;
+  /** Kiírás, ha nincs egy cím sem a részútvonalon. */
+  emptyText?: string;
 };
 
-export function useRouteLine({ enabled, stops, restOnly, isPending, gps }: Options) {
+export function useRouteLine({
+  enabled,
+  stops,
+  restOnly,
+  isPending,
+  gps,
+  label = "Hátralévő útvonal",
+  emptyText = "Minden cím le van adva – nincs hátralévő útvonal.",
+}: Options) {
   const [line, setLine] = useState<[number, number][] | null>(null);
   const [message, setMessage] = useState("");
   const [restOrder, setRestOrder] = useState<string[]>([]);
   const gpsRef = useRef(gps);
   gpsRef.current = gps;
-  // csak akkor számol újra, ha a hátralévő címek köre változik (nem minden GPS-pontnál)
+  // csak akkor számol újra, ha a hátralévő címek köre változik, vagy először lett helyzet (nem minden GPS-pontnál)
   const restKey = restOnly
-    ? stops
+    ? label +
+      "|" +
+      (gps ? "gps" : "") +
+      "|" +
+      stops
         .filter(isPending)
         .map((s) => s.id)
         .join(",")
@@ -41,9 +57,8 @@ export function useRouteLine({ enabled, stops, restOnly, isPending, gps }: Optio
       const rest = bestOrder(located.filter(isPending), here);
       setRestOrder(rest.map((s) => s.id));
       pts = here && rest.length ? [here, ...rest] : rest;
-      summary = rest.length
-        ? `Hátralévő útvonal: ${rest.length} cím${here ? " a jelenlegi helyzetedtől" : ""} (újraszámolva)`
-        : "Minden cím le van adva – nincs hátralévő útvonal.";
+      const from = here ? " a jelenlegi helyzetedtől, a legközelebbivel kezdve" : " (a saját helyzeted még nem ismert)";
+      summary = rest.length ? `${label}: ${rest.length} cím${from}` : emptyText;
     } else {
       setRestOrder([]);
       const missing = stops.length - located.length;

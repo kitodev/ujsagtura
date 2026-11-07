@@ -28,11 +28,13 @@ import { todayISO } from "@/lib/dates";
 import {
   countByStatus,
   isHandled,
+  isMissing,
   isPending,
   matchesFilter,
   nextStatus,
   nextStopAfter,
   orderedStops,
+  replacementStatus,
   summaryText,
   withStatus,
 } from "@/lib/deliveries";
@@ -76,7 +78,10 @@ export default function Page() {
   const [full, setFull] = useState(false);
   const [drive, setDrive] = useState(false);
   const [voice, setVoice] = useState(false);
-  const [restOnly, setRestOnly] = useState(false);
+  /** Útvonal mód: teljes túra, csak a hátralévő címek, vagy pótlás (csak a hiányzó újságos címek). */
+  const [routeMode, setRouteMode] = useState<"full" | "rest" | "replace">("full");
+  const restOnly = routeMode !== "full";
+  const replaceMode = routeMode === "replace";
   const [dialog, setDialog] = useState<DialogState>(null);
   const [summary, setSummary] = useState("");
   const [mapping, setMapping] = useState(false);
@@ -91,7 +96,9 @@ export default function Page() {
   const found = useSearch(query, day, data.version, data.absorb);
   useFullscreen(full, () => setFull(false));
 
-  const pending = (s: Stop) => isPending(s, deliveries);
+  /** Mi számít elintézetlennek: pótlás módban a hiányzó újságos cím, egyébként a jelöletlen. */
+  const isOpen = (s: Stop, d: Deliveries) => (replaceMode ? isMissing(s, d) : isPending(s, d));
+  const pending = (s: Stop) => isOpen(s, deliveries);
 
   // ——— Helyzet, útvonal, navigáció ———
   const { gps, heading, watch } = useGeolocation();
@@ -131,7 +138,17 @@ export default function Page() {
   useEffect(() => {
     if (showMap) void loadRoadGraph();
   }, [showMap]);
-  const routeLine = useRouteLine({ enabled: showMap, stops, restOnly, isPending: pending, gps });
+  const routeLine = useRouteLine({
+    enabled: showMap,
+    stops,
+    restOnly,
+    isPending: pending,
+    gps,
+    ...(replaceMode && {
+      label: "🔁 Pótlás útvonal",
+      emptyText: "✅ Minden hiányzó újság pótolva – nincs több pótlandó cím.",
+    }),
+  });
   /** Navigációs „menet” fut: egy cím elintézése után jön a következő. */
   const tour = useRef(false);
 
@@ -199,7 +216,7 @@ export default function Page() {
 
   /** Jelölés után: ha a cím minden újsága jelölve van, navigáció közben indul a következő címre. */
   function afterMark(s: Stop, d: Deliveries) {
-    const done = isHandled(s, d);
+    const done = replaceMode ? !isMissing(s, d) : isHandled(s, d);
     if (!done) {
       if (advance.advance?.from.id === s.id) advance.cancel();
       return;
@@ -210,12 +227,28 @@ export default function Page() {
       last?.id === s.id ||
       navigation.nearTargetId() === s.id;
     if (!tour.current || (nav && !isTarget)) return;
-    advance.schedule(s, nextStopAfter(order(), s.id, d));
+    advance.schedule(s, nextStopAfter(order(), s.id, d, isOpen));
+  }
+
+  /** Pótlás útvonal be/ki: csak a hiányzó újságos címek, a saját helyzethez legközelebbivel kezdve. */
+  function toggleReplace() {
+    if (replaceMode) {
+      setRouteMode("full");
+      setMessage("");
+      return;
+    }
+    setRouteMode("replace");
+    setFilter("");
+    setQuery("");
+    setShowMap(true);
+    watch(); // a saját helyzet kell, hogy a legközelebbi címmel kezdjen
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function cyclePaper(s: Stop, p: Paper) {
     const current = deliveries[p.id];
-    const status = nextStatus(current);
+    // pótlás módban a „Hiányzik” → „Leadva” (pótolva)
+    const status = replaceMode ? replacementStatus(current) : nextStatus(current);
     const next = withStatus(deliveries, p.id, status);
     data.setDeliveries((d) => withStatus(d, p.id, status));
     data.setSince((old) => {
@@ -223,7 +256,8 @@ export default function Page() {
       const { [p.id]: _, ...rest } = old; // mától saját jelölés
       return rest;
     });
-    if (status === "cancelled") showToast(`🚫 ${p.paper} – ${s.address}: lemondva mától, amíg át nem állítod.`);
+    if (replaceMode && current === "missing") showToast(`✓ ${p.paper} – ${s.address}: pótolva.`);
+    else if (status === "cancelled") showToast(`🚫 ${p.paper} – ${s.address}: lemondva mától, amíg át nem állítod.`);
     else if (current === "cancelled") showToast(`✔ ${p.paper} – ${s.address}: a lemondás mától megszűnt.`);
     setLast(s);
     afterMark(s, next);
@@ -231,7 +265,10 @@ export default function Page() {
   }
 
   async function markAllDelivered(s: Stop) {
-    const ids = s.stop_papers.filter((p) => !deliveries[p.id]).map((p) => p.id);
+    // pótlás módban a hiányzó újságok is „Leadva” lesznek
+    const ids = s.stop_papers
+      .filter((p) => !deliveries[p.id] || (replaceMode && deliveries[p.id] === "missing"))
+      .map((p) => p.id);
     const marks = Object.fromEntries(ids.map((id) => [id, "delivered" as const]));
     data.setDeliveries((d) => ({ ...d, ...marks }));
     setLast(s);
@@ -390,10 +427,10 @@ export default function Page() {
   const doneCount = papers.length - counts.todo;
   const here = gps ?? (last && isLocated(last) ? { lat: last.lat, lon: last.lon } : null);
   const next = useMemo(() => {
-    const s = nextStopAfter(order(), last?.id ?? null, deliveries);
+    const s = nextStopAfter(order(), last?.id ?? null, deliveries, isOpen);
     return s ? { stop: s, distance: here && isLocated(s) ? distanceM(here, s) : null } : null;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `order` a felsoroltaktól függ
-  }, [stops, deliveries, here, last, restOnly, routeLine.restOrder]);
+  }, [stops, deliveries, here, last, routeMode, routeLine.restOrder]);
 
   const hideDone = restOnly || filter === "todo";
   const pins = buildPins(allStops, {
@@ -404,7 +441,12 @@ export default function Page() {
     restOnly,
     hideDone,
     keepId: selection.selected,
+    isOpen,
   });
+  /** A pótlandó (hiányzó újságos) címek száma a kiválasztott napon. */
+  const missingStops = stops.filter((s) => isMissing(s, deliveries)).length;
+  /** Pótlás módban a lista: csak a hiányzó újságos címek, az útvonal sorrendjében. */
+  const replaceList = replaceMode ? order().filter((s) => isMissing(s, deliveries)) : [];
   const navTarget = (to: Stop) => stops.find((s) => s.id === to.id) ?? allStops.find((s) => s.id === to.id) ?? to;
   const infoStop = infoId ? (stops.find((s) => s.id === infoId) ?? allStops.find((s) => s.id === infoId)) : undefined;
   const info: PinInfo | null =
@@ -441,6 +483,7 @@ export default function Page() {
         selection.clear();
         setFocus(null);
       }}
+      replace={replaceMode}
     />
   );
 
@@ -478,7 +521,7 @@ export default function Page() {
               full={full}
               drive={drive}
               restOnly={restOnly}
-              onToggleRest={() => setRestOnly(!restOnly)}
+              onToggleRest={() => setRouteMode(restOnly ? "full" : "rest")}
               onToggleFull={() => setFull(!full)}
               onToggleDrive={() => {
                 if (!drive) watch();
@@ -559,6 +602,9 @@ export default function Page() {
         onAddRoute={() => setDialog({ kind: "route" })}
         onScan={() => setDialog({ kind: "scan" })}
         onExcel={() => setDialog({ kind: "excel" })}
+        missingStops={missingStops}
+        replaceMode={replaceMode}
+        onToggleReplace={toggleReplace}
       />
 
       <main>
@@ -568,7 +614,27 @@ export default function Page() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        {!query.trim() && <FilterBar value={filter} counts={counts} total={papers.length} onChange={setFilter} />}
+        {replaceMode && !query.trim() && (
+          <div className="replace-bar">
+            <div>
+              <b>🔁 Pótlás útvonal</b> – {replaceList.length} cím, ahol hiányzó újság van
+              {gps ? ", a legközelebbivel kezdve." : "."}
+              {!gps && (
+                <div className="meta">
+                  A saját helyzeted még nem ismert: engedélyezd a helymeghatározást, és a sorrend a hozzád
+                  legközelebbi címmel fog kezdődni.
+                </div>
+              )}
+              <div className="meta">
+                A narancs „Hiányzik” újságra koppintva, vagy a „✓ Pótolva” gombbal jelöld pótoltnak.
+              </div>
+            </div>
+            <button onClick={toggleReplace}>✕ Vége</button>
+          </div>
+        )}
+        {!query.trim() && !replaceMode && (
+          <FilterBar value={filter} counts={counts} total={papers.length} onChange={setFilter} />
+        )}
 
         {summary && (
           <pre>
@@ -588,7 +654,10 @@ export default function Page() {
             {found.map((s) => card(s, null, s.route_id))}
           </>
         ) : (
-          !full && stops.map((s, i) => (matchesFilter(s, deliveries, filter) ? card(s, i) : null))
+          !full &&
+          (replaceMode
+            ? replaceList.map((s, i) => card(s, i))
+            : stops.map((s, i) => (matchesFilter(s, deliveries, filter) ? card(s, i) : null)))
         )}
       </main>
 

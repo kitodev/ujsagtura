@@ -26,6 +26,8 @@ type PinOptions = {
   hideDone: boolean;
   /** Ezt a címet akkor is mutatjuk, ha el lenne rejtve. */
   keepId?: string;
+  /** Mi számít elintézetlennek (alapból: van jelöletlen újság; pótlás módban: van hiányzó újság). */
+  isOpen?: (s: Stop, d: Deliveries) => boolean;
 };
 
 export function buildPins(stops: Stop[], o: PinOptions): Pin[] {
@@ -33,7 +35,7 @@ export function buildPins(stops: Stop[], o: PinOptions): Pin[] {
   const d = o.deliveries;
   return stops.flatMap((s): Pin[] => {
     if (s.lat == null || s.lon == null) return [];
-    if (o.hideDone && !isPending(s, d) && s.id !== o.keepId) return [];
+    if (o.hideDone && !(o.isOpen ?? isPending)(s, d) && s.id !== o.keepId) return [];
     const rank = restRank.get(s.id);
     let cls: Pin["cls"];
     if (rank) cls = rank === 1 ? "n" : isTouched(s, d) ? "h" : "";

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   countByStatus,
   isHandled,
+  isMissing,
   isPending,
   matchesFilter,
   nextStatus,
   nextStopAfter,
   orderedStops,
+  replacementStatus,
   sinceLabel,
   summaryText,
   withStatus,
@@ -102,5 +104,28 @@ describe("sinceLabel / summaryText", () => {
       "Összesítő – 2026-10-25 – 253\n\nCím 1 – VAS: Hiányzik",
     );
     expect(summaryText(stops, {}, "d", "r")).toContain("Nincs hiányzó vagy lemondott újság.");
+  });
+});
+
+describe("pótlás", () => {
+  it("isMissing: van-e hiányzó újság a címen", () => {
+    const s = stop("1", ["PE", "VAS"]);
+    expect(isMissing(s, {})).toBe(false);
+    expect(isMissing(s, { "1-PE": "delivered" })).toBe(false);
+    expect(isMissing(s, { "1-PE": "delivered", "1-VAS": "missing" })).toBe(true);
+  });
+
+  it("replacementStatus: a Hiányzik → Leadva, a többi a szokásos körforgás", () => {
+    expect(replacementStatus("missing")).toBe("delivered");
+    expect(replacementStatus(undefined)).toBe("delivered");
+    expect(replacementStatus("delivered")).toBe("missing");
+    expect(replacementStatus("cancelled")).toBeNull();
+  });
+
+  it("nextStopAfter pótlás módban csak a hiányzó újságos címeket adja", () => {
+    const list = [stop("1", ["PE"]), stop("2", ["PE"]), stop("3", ["PE"])];
+    const d: Deliveries = { "1-PE": "delivered", "2-PE": "delivered", "3-PE": "missing" };
+    expect(nextStopAfter(list, null, d, isMissing)?.id).toBe("3");
+    expect(nextStopAfter(list, null, { ...d, "3-PE": "delivered" }, isMissing)).toBeNull();
   });
 });

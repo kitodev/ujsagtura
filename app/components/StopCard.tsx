@@ -1,5 +1,5 @@
 "use client";
-import { isHandled } from "@/lib/deliveries";
+import { isHandled, isMissing } from "@/lib/deliveries";
 import type { Deliveries, Paper, Stop } from "@/lib/types";
 import { PaperChip } from "./PaperChip";
 
@@ -20,6 +20,8 @@ type Props = {
   /** A kártyára (nem gombra) koppintva: a cím megmutatása a térképen. */
   onShowOnMap: (stop: Stop) => void;
   onClearSelection: () => void;
+  /** Pótlás mód: a „Mind leadva” helyett „Pótolva” gomb a hiányzó újságokra. */
+  replace?: boolean;
 };
 
 /** Egy cím kártyája a listában: cím, név, megjegyzés, újságok jelöléssel. */
@@ -61,11 +63,17 @@ export function StopCard(p: Props) {
           <button className="all muted" onClick={() => p.onEdit(s)}>
             ✎ Szerkeszt
           </button>
-          {!done && (
-            <button className="all" onClick={() => p.onAllDone(s)}>
-              Mind leadva
-            </button>
-          )}
+          {p.replace
+            ? isMissing(s, d) && (
+                <button className="all" onClick={() => p.onAllDone(s)}>
+                  ✓ Pótolva
+                </button>
+              )
+            : !done && (
+                <button className="all" onClick={() => p.onAllDone(s)}>
+                  Mind leadva
+                </button>
+              )}
         </div>
       </div>
       {s.note && <div className="sn">⚠ {s.note}</div>}

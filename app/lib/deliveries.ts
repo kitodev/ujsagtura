@@ -35,6 +35,14 @@ export const isHandled = (s: Stop, d: Deliveries) => s.stop_papers.every((p) => 
 /** Van még jelöletlen újság a címen. */
 export const isPending = (s: Stop, d: Deliveries) => s.stop_papers.some((p) => !d[p.id]);
 
+/** Van „Hiányzik” jelölésű újság a címen (pótlásra vár). */
+export const isMissing = (s: Stop, d: Deliveries) => s.stop_papers.some((p) => d[p.id] === "missing");
+
+/** Pótlás módban a „Hiányzik” újságra koppintva az „Leadva” lesz (pótolva); egyébként a szokásos körforgás. */
+export function replacementStatus(current: Status | undefined): Status | null {
+  return current === "missing" ? "delivered" : nextStatus(current);
+}
+
 /** Van-e jelölés a címen (részben kezelt). */
 export const isTouched = (s: Stop, d: Deliveries) => s.stop_papers.some((p) => d[p.id]);
 
@@ -55,14 +63,20 @@ export function countByStatus(stops: Stop[], d: Deliveries): StatusCounts {
 
 /**
  * A következő elintézetlen, helyadattal rendelkező cím a megadott sorrendben, `afterId` után (körbefordulva).
- * `afterId` = null esetén az első ilyen cím.
+ * `afterId` = null esetén az első ilyen cím. `open`: mi számít elintézetlennek (alapból: van jelöletlen újság;
+ * pótlás módban: van hiányzó újság).
  */
-export function nextStopAfter(order: Stop[], afterId: string | null, d: Deliveries): Stop | null {
+export function nextStopAfter(
+  order: Stop[],
+  afterId: string | null,
+  d: Deliveries,
+  open: (s: Stop, d: Deliveries) => boolean = isPending,
+): Stop | null {
   const n = order.length;
   const start = afterId ? order.findIndex((s) => s.id === afterId) : -1;
   for (let k = 1; k <= n; k++) {
     const s = order[(start + k + n) % n];
-    if (s.id !== afterId && s.lat != null && s.lon != null && isPending(s, d)) return s;
+    if (s.id !== afterId && s.lat != null && s.lon != null && open(s, d)) return s;
   }
   return null;
 }

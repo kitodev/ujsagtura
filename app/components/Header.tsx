@@ -28,6 +28,11 @@ type Props = {
   onRelocateStops: () => void;
   offlineSaving: boolean;
   onSaveOffline: () => void;
+  /** Hány címen van hiányzó (pótlandó) újság a kiválasztott napon. */
+  missingStops: number;
+  /** Pótlás útvonal be van kapcsolva. */
+  replaceMode: boolean;
+  onToggleReplace: () => void;
 };
 
 export function Header(p: Props) {
@@ -71,6 +76,15 @@ export function Header(p: Props) {
         <button className={p.showMap ? "on" : ""} onClick={p.onToggleMap}>
           🗺 Térkép
         </button>
+        {(p.missingStops > 0 || p.replaceMode) && (
+          <button
+            className={p.replaceMode ? "on" : "replace-btn"}
+            onClick={p.onToggleReplace}
+            title="Útvonal csak a hiányzó újságos címekre, a legközelebbivel kezdve"
+          >
+            {p.replaceMode ? "✕ Pótlás vége" : `🔁 Pótlás (${p.missingStops})`}
+          </button>
+        )}
         <button onClick={p.onAddStop}>+ Cím</button>
         <button className={menu ? "on" : ""} aria-expanded={menu} onClick={() => setMenu(!menu)}>
           ⋯ Több

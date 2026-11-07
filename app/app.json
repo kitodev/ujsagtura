@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "79f84ce9-1b01-42f5-a5e7-69d6f3020a84"
+      }
+    },
+    "android": {
+      "package": "com.tkornel19.ujsagtura"
+    }
+  }
+}
