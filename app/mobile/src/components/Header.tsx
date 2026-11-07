@@ -33,6 +33,11 @@ type Props = {
   onToggleMap: () => void;
   onAddStop: () => void;
   onMenu: (action: MenuAction) => void;
+  /** Hány címen van hiányzó (pótlandó) újság a kiválasztott napon. */
+  missingStops: number;
+  /** Pótlás útvonal be van kapcsolva. */
+  replaceMode: boolean;
+  onToggleReplace: () => void;
 };
 
 export function Header(p: Props) {
@@ -67,6 +72,15 @@ export function Header(p: Props) {
 
       <View style={s.tools}>
         <Btn small variant={p.showMap ? "on" : "default"} label="🗺 Térkép" onPress={p.onToggleMap} />
+        {(p.missingStops > 0 || p.replaceMode) && (
+          <Btn
+            small
+            variant={p.replaceMode ? "on" : "warn"}
+            label={p.replaceMode ? "✕ Pótlás vége" : `🔁 Pótlás (${p.missingStops})`}
+            onPress={p.onToggleReplace}
+            accessibilityLabel="Útvonal csak a hiányzó újságos címekre, a legközelebbivel kezdve"
+          />
+        )}
         <Btn small label="+ Cím" onPress={p.onAddStop} />
         <Btn small label="⋯ Több" onPress={() => setMenu(true)} />
         {!!p.busy && <Text style={s.busy}>{p.busy}</Text>}

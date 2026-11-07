@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Pressable, StyleSheet, Text, TextInput, type TextInputProps, type ViewStyle } from "react-native";
 import { C } from "@/theme";
 
-type Variant = "default" | "primary" | "on" | "muted" | "danger" | "dark";
+type Variant = "default" | "primary" | "on" | "muted" | "danger" | "dark" | "warn";
 
 type BtnProps = {
   label: ReactNode;
@@ -22,6 +22,7 @@ const BG: Record<Variant, string> = {
   muted: C.bg,
   danger: C.card,
   dark: "rgba(29,29,27,0.85)",
+  warn: C.mi,
 };
 const FG: Record<Variant, string> = {
   default: C.tx,
@@ -30,6 +31,7 @@ const FG: Record<Variant, string> = {
   muted: C.mu,
   danger: C.ca,
   dark: "#fff",
+  warn: "#fff",
 };
 
 export function Btn({ label, onPress, variant = "default", small, disabled, style, accessibilityLabel }: BtnProps) {

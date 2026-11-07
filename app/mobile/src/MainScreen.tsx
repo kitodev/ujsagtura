@@ -18,11 +18,13 @@ import { todayISO } from "@shared/dates";
 import {
   countByStatus,
   isHandled,
+  isMissing,
   isPending,
   matchesFilter,
   nextStatus,
   nextStopAfter,
   orderedStops,
+  replacementStatus,
   summaryText,
   withStatus,
 } from "@shared/deliveries";
@@ -86,7 +88,10 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
   const [full, setFull] = useState(false);
   const [drive, setDrive] = useState(false);
   const [voice, setVoice] = useState(false);
-  const [restOnly, setRestOnly] = useState(false);
+  /** Útvonal mód: teljes túra, csak a hátralévő címek, vagy pótlás (csak a hiányzó újságos címek). */
+  const [routeMode, setRouteMode] = useState<"full" | "rest" | "replace">("full");
+  const restOnly = routeMode !== "full";
+  const replaceMode = routeMode === "replace";
   const [dialog, setDialog] = useState<DialogState>(null);
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState("");
@@ -106,7 +111,9 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
   const selection = useSelection(scroll, stops);
   const found = useSearch(query, day, data.version, data.absorb);
 
-  const pending = (s: Stop) => isPending(s, deliveries);
+  /** Mi számít elintézetlennek: pótlás módban a hiányzó újságos cím, egyébként a jelöletlen. */
+  const isOpen = (s: Stop, d: Deliveries) => (replaceMode ? isMissing(s, d) : isPending(s, d));
+  const pending = (s: Stop) => isOpen(s, deliveries);
 
   // ——— Helyzet, kapcsolat, útvonal, navigáció ———
   const { gps, heading, watch } = useLocation();
@@ -132,6 +139,10 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
     isPending: pending,
     gps,
     online: connection.online,
+    ...(replaceMode && {
+      label: "🔁 Pótlás útvonal",
+      emptyText: "✅ Minden hiányzó újság pótolva – nincs több pótlandó cím.",
+    }),
   });
   const tour = useRef(false);
 
@@ -197,7 +208,8 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
   // ——— Jelölés ———
 
   function afterMark(s: Stop, d: Deliveries) {
-    if (!isHandled(s, d)) {
+    const done = replaceMode ? !isMissing(s, d) : isHandled(s, d);
+    if (!done) {
       if (advance.advance?.from.id === s.id) advance.cancel();
       return;
     }
@@ -207,7 +219,21 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
       last?.id === s.id ||
       navigation.nearTargetId() === s.id;
     if (!tour.current || (nav && !isTarget)) return;
-    advance.schedule(s, nextStopAfter(order(), s.id, d));
+    advance.schedule(s, nextStopAfter(order(), s.id, d, isOpen));
+  }
+
+  /** Pótlás útvonal be/ki: csak a hiányzó újságos címek, a saját helyzethez legközelebbivel kezdve. */
+  function toggleReplace() {
+    if (replaceMode) {
+      setRouteMode("full");
+      return;
+    }
+    setRouteMode("replace");
+    setFilter("");
+    setQuery("");
+    setShowMap(true);
+    void watch(); // a saját helyzet kell, hogy a legközelebbi címmel kezdjen
+    scroll.current?.scrollTo({ y: 0, animated: true });
   }
 
   async function saveMark(ids: string[], status: Parameters<typeof api.mark>[2]) {
@@ -220,7 +246,8 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
 
   function cyclePaper(s: Stop, p: Paper) {
     const current = deliveries[p.id];
-    const status = nextStatus(current);
+    // pótlás módban a „Hiányzik” → „Leadva” (pótolva)
+    const status = replaceMode ? replacementStatus(current) : nextStatus(current);
     const next = withStatus(deliveries, p.id, status);
     data.setDeliveries((d) => withStatus(d, p.id, status));
     data.setSince((old) => {
@@ -228,7 +255,8 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
       const { [p.id]: _, ...rest } = old;
       return rest;
     });
-    if (status === "cancelled") showToast(`🚫 ${p.paper} – ${s.address}: lemondva mától, amíg át nem állítod.`);
+    if (replaceMode && current === "missing") showToast(`✓ ${p.paper} – ${s.address}: pótolva.`);
+    else if (status === "cancelled") showToast(`🚫 ${p.paper} – ${s.address}: lemondva mától, amíg át nem állítod.`);
     else if (current === "cancelled") showToast(`✔ ${p.paper} – ${s.address}: a lemondás mától megszűnt.`);
     setLast(s);
     afterMark(s, next);
@@ -236,7 +264,10 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
   }
 
   function markAllDelivered(s: Stop) {
-    const ids = s.stop_papers.filter((p) => !deliveries[p.id]).map((p) => p.id);
+    // pótlás módban a hiányzó újságok is „Leadva” lesznek
+    const ids = s.stop_papers
+      .filter((p) => !deliveries[p.id] || (replaceMode && deliveries[p.id] === "missing"))
+      .map((p) => p.id);
     const marks = Object.fromEntries(ids.map((id) => [id, "delivered" as const]));
     data.setDeliveries((d) => ({ ...d, ...marks }));
     setLast(s);
@@ -427,10 +458,10 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
   const doneCount = papers.length - counts.todo;
   const here = gps ?? (last && isLocated(last) ? { lat: last.lat, lon: last.lon } : null);
   const next = useMemo(() => {
-    const s = nextStopAfter(order(), last?.id ?? null, deliveries);
+    const s = nextStopAfter(order(), last?.id ?? null, deliveries, isOpen);
     return s ? { stop: s, distance: here && isLocated(s) ? distanceM(here, s) : null } : null;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `order` a felsoroltaktól függ
-  }, [stops, deliveries, here, last, restOnly, routeLine.restOrder]);
+  }, [stops, deliveries, here, last, routeMode, routeLine.restOrder]);
 
   const hideDone = restOnly || filter === "todo";
   const pins = useMemo(
@@ -443,9 +474,24 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
         restOnly,
         hideDone,
         keepId: selection.selected,
+        isOpen: replaceMode ? isMissing : isPending,
       }),
-    [allStops, deliveries, route, next?.stop.id, routeLine.restOrder, restOnly, hideDone, selection.selected],
+    [
+      allStops,
+      deliveries,
+      route,
+      next?.stop.id,
+      routeLine.restOrder,
+      restOnly,
+      replaceMode,
+      hideDone,
+      selection.selected,
+    ],
   );
+  /** A pótlandó (hiányzó újságos) címek száma a kiválasztott napon. */
+  const missingStops = stops.filter((x) => isMissing(x, deliveries)).length;
+  /** Pótlás módban a lista: csak a hiányzó újságos címek, az útvonal sorrendjében. */
+  const replaceList = replaceMode ? order().filter((x) => isMissing(x, deliveries)) : [];
   const fitIds = useMemo(() => stops.filter(isLocated).map((s) => s.id), [stops]);
   const navTarget = (to: Stop) => findStop(to.id) ?? to;
   const infoStop = infoId ? findStop(infoId) : undefined;
@@ -475,6 +521,7 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
         setFocus(null);
       }}
       onLayoutY={routeTag ? undefined : (y) => selection.placeCard(s.id, y)}
+      replace={replaceMode}
     />
   );
 
@@ -539,7 +586,7 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
                   if (gps) mapRef.current?.center(gps);
                   else setMessage("Helyzet meghatározása…");
                 }}
-                onToggleRest={() => setRestOnly(!restOnly)}
+                onToggleRest={() => setRouteMode(restOnly ? "full" : "rest")}
               />
               {nav && (
                 <>
@@ -596,6 +643,9 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
                 onToggleMap={() => setShowMap(!showMap)}
                 onAddStop={() => setDialog({ kind: "add" })}
                 onMenu={onMenu}
+                missingStops={missingStops}
+                replaceMode={replaceMode}
+                onToggleReplace={toggleReplace}
               />
 
               <View
@@ -618,7 +668,27 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
                   autoCorrect={false}
                   clearButtonMode="while-editing"
                 />
-                {!query.trim() && (
+                {replaceMode && !query.trim() && (
+                  <View style={s.replace}>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={s.replaceTitle}>
+                        🔁 Pótlás útvonal – {replaceList.length} cím, ahol hiányzó újság van
+                        {gps ? ", a legközelebbivel kezdve." : "."}
+                      </Text>
+                      {!gps && (
+                        <Text style={s.meta}>
+                          A saját helyzeted még nem ismert: engedélyezd a helymeghatározást, és a sorrend a hozzád
+                          legközelebbi címmel fog kezdődni.
+                        </Text>
+                      )}
+                      <Text style={s.meta}>
+                        A narancs „Hiányzik” újságra koppintva, vagy a „✓ Pótolva” gombbal jelöld pótoltnak.
+                      </Text>
+                    </View>
+                    <Btn small variant="muted" label="✕ Vége" onPress={toggleReplace} />
+                  </View>
+                )}
+                {!query.trim() && !replaceMode && (
                   <FilterBar value={filter} counts={counts} total={papers.length} onChange={setFilter} />
                 )}
                 {!!summary && (
@@ -646,8 +716,13 @@ export function MainScreen({ onServerChange }: { onServerChange: (url: string) =
                       placeList();
                     }}
                   >
-                    {stops.map((x, i) => (matchesFilter(x, deliveries, filter) ? card(x, i) : null))}
+                    {replaceMode
+                      ? replaceList.map((x, i) => card(x, i))
+                      : stops.map((x, i) => (matchesFilter(x, deliveries, filter) ? card(x, i) : null))}
                     {!stops.length && <Text style={s.meta}>Ebben a túrában még nincs cím.</Text>}
+                    {replaceMode && !!stops.length && !replaceList.length && (
+                      <Text style={s.meta}>✅ Minden hiányzó újság pótolva.</Text>
+                    )}
                   </View>
                 )}
               </View>
@@ -776,6 +851,17 @@ const s = StyleSheet.create({
   summaryText: { fontFamily: "monospace", fontSize: 13, color: C.tx },
   row: { flexDirection: "row", gap: 8 },
   note: { backgroundColor: "#fff8e1", borderRadius: 8, padding: 8, color: C.tx },
+  replace: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+    backgroundColor: "#fdf0d9",
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: C.mi,
+  },
+  replaceTitle: { fontWeight: "700", color: C.tx },
   toast: {
     position: "absolute",
     left: 16,

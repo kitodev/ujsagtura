@@ -1,6 +1,6 @@
 // Egy cím kártyája a listában: cím, név, megjegyzés, újságok jelöléssel.
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { isHandled } from "@shared/deliveries";
+import { isHandled, isMissing } from "@shared/deliveries";
 import type { Deliveries, Paper, Stop } from "@shared/types";
 import { C } from "@/theme";
 import { PaperChip } from "./PaperChip";
@@ -21,6 +21,8 @@ type Props = {
   onShowOnMap: (stop: Stop) => void;
   onClearSelection: () => void;
   onLayoutY?: (y: number) => void;
+  /** Pótlás mód: a „Mind leadva” helyett „Pótolva” gomb a hiányzó újságokra. */
+  replace?: boolean;
 };
 
 export function StopCard(p: Props) {
@@ -55,7 +57,9 @@ export function StopCard(p: Props) {
         </View>
         <View style={st.actions}>
           <Btn small variant="muted" label="✎ Szerkeszt" onPress={() => p.onEdit(s)} />
-          {!done && <Btn small variant="primary" label="Mind leadva" onPress={() => p.onAllDone(s)} />}
+          {p.replace
+            ? isMissing(s, d) && <Btn small variant="warn" label="✓ Pótolva" onPress={() => p.onAllDone(s)} />
+            : !done && <Btn small variant="primary" label="Mind leadva" onPress={() => p.onAllDone(s)} />}
         </View>
       </View>
       {!!s.note && <Text style={st.note}>⚠ {s.note}</Text>}
